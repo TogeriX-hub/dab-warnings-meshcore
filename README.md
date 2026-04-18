@@ -61,7 +61,7 @@ WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingu
 
 Dieses Projekt nutzt eine angepasste Version von welle.io:
 
-👉 https://github.com/TogeriX-hub/welle.io  
+https://github.com/TogeriX-hub/welle.io  
 
 Bitte diesen Fork verwenden und selbst kompilieren.
 
