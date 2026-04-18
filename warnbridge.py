@@ -7,6 +7,7 @@ DAB-Listener kommt in Phase 3 dazu.
 import asyncio
 import logging
 import signal
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +24,10 @@ from dab_listener import DabListener
 import ags_lookup
 
 logger = logging.getLogger(__name__)
+
+# welle-cli Watchdog: wie oft pro Stunde darf neu gestartet werden
+WELLE_RESTART_COOLDOWN_SECONDS = 120   # min. 2 Minuten zwischen Neustarts
+WELLE_WATCHDOG_CHECK_INTERVAL = 5      # alle 5s prüfen ob Watchdog ausgelöst
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -64,9 +69,13 @@ class WarnBridge:
 
         self._tasks: list[asyncio.Task] = []
 
+        # welle-cli Watchdog State
+        self._welle_last_restart: Optional[datetime] = None
+        self._welle_restart_count: int = 0
+
     async def handle_warning(self, w: NormalizedWarning):
         """
-        Zentraler Handler für alle eingehenden Warnungen (NINA + später DAB+).
+        Zentraler Handler für alle eingehenden Warnungen (NINA + DAB+).
         Dedup → DB speichern → Mesh senden.
         """
         logger.debug("Neue Warnung: [%s] %s", w.source, w.headline)
@@ -110,10 +119,8 @@ class WarnBridge:
     def _should_broadcast(self, w: NormalizedWarning, broadcast_districts: list[str]) -> bool:
         """Prüft ob die Warnung automatisch ins Mesh gesendet werden soll."""
         if not broadcast_districts:
-            # Kein Filter → alles broadcasten
             return True
         if not w.ags_codes:
-            # Keine AGS → sicherheitshalber broadcasten
             return True
         return any(
             ags.startswith(district[:5])
@@ -137,7 +144,7 @@ class WarnBridge:
         # NINA Poller starten
         self._tasks.append(asyncio.create_task(self.nina.run(), name="nina_poller"))
 
-        # DAB-Listener starten (Phase 3)
+        # DAB-Listener starten
         self._tasks.append(asyncio.create_task(self.dab.run(), name="dab_listener"))
 
         # Täglicher Cleanup
@@ -146,10 +153,12 @@ class WarnBridge:
         # Mesh Reconnect-Wächter
         self._tasks.append(asyncio.create_task(self._mesh_reconnect_loop(), name="mesh_reconnect"))
 
+        # welle-cli Watchdog
+        self._tasks.append(asyncio.create_task(self._welle_watchdog_loop(), name="welle_watchdog"))
+
         logger.info("WarnBridge läuft. Simulator: %s",
                     self.cfg.get("meshcore", {}).get("simulator", True))
 
-        # Warten bis alle Tasks fertig sind (laufen ewig)
         try:
             await asyncio.gather(*self._tasks)
         except asyncio.CancelledError:
@@ -165,7 +174,7 @@ class WarnBridge:
     async def _cleanup_loop(self):
         """Täglich expired entries löschen."""
         while True:
-            await asyncio.sleep(3600 * 6)  # alle 6 Stunden
+            await asyncio.sleep(3600 * 6)
             try:
                 self.dedup.cleanup_expired()
                 self.db.cleanup_expired()
@@ -183,6 +192,69 @@ class WarnBridge:
             except Exception as e:
                 logger.error("Mesh Reconnect Fehler: %s", e)
 
+    async def _welle_watchdog_loop(self):
+        """
+        Überwacht den DAB-Listener. Wenn welle-cli einfriert (Watchdog ausgelöst),
+        wird der Prozess beendet und neu gestartet.
+        Nur aktiv wenn welle_cli_autostart: true in config.yaml (dab-Block).
+        """
+        dab_cfg = self.cfg.get("dab", {})
+        autostart = dab_cfg.get("welle_cli_autostart", False)
+
+        if not autostart:
+            logger.debug("welle-cli Watchdog inaktiv (welle_cli_autostart: false)")
+            return
+
+        welle_cmd = dab_cfg.get("welle_cli_cmd", "")
+        if not welle_cmd:
+            logger.warning("welle-cli Watchdog: welle_cli_cmd nicht konfiguriert – Watchdog inaktiv")
+            return
+
+        logger.info("welle-cli Watchdog aktiv (cmd: %s)", welle_cmd)
+
+        while True:
+            await asyncio.sleep(WELLE_WATCHDOG_CHECK_INTERVAL)
+
+            if not self.dab.watchdog_triggered:
+                continue
+
+            # Cooldown prüfen
+            now = datetime.now(timezone.utc)
+            if self._welle_last_restart:
+                elapsed = (now - self._welle_last_restart).total_seconds()
+                if elapsed < WELLE_RESTART_COOLDOWN_SECONDS:
+                    remaining = int(WELLE_RESTART_COOLDOWN_SECONDS - elapsed)
+                    logger.debug("welle-cli Watchdog: Cooldown aktiv, noch %ds", remaining)
+                    continue
+
+            # welle-cli neu starten
+            self._welle_restart_count += 1
+            self._welle_last_restart = now
+            logger.warning("welle-cli Watchdog: Neustart #%d wird durchgeführt...",
+                           self._welle_restart_count)
+
+            try:
+                # Alten Prozess beenden
+                subprocess.run(["pkill", "-f", "welle-cli"], capture_output=True)
+                await asyncio.sleep(2)
+
+                # Neu starten (im Hintergrund, non-blocking)
+                subprocess.Popen(
+                    welle_cmd,
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                logger.info("welle-cli neu gestartet (cmd: %s)", welle_cmd)
+
+                # DAB-Listener Watchdog zurücksetzen
+                await asyncio.sleep(3)  # kurz warten bis welle-cli hochfährt
+                self.dab.reset_watchdog()
+                logger.info("welle-cli Watchdog: DAB-Listener zurückgesetzt")
+
+            except Exception as e:
+                logger.error("welle-cli Watchdog: Neustart fehlgeschlagen: %s", e)
+
     def status(self) -> dict:
         uptime_seconds = int((datetime.now(timezone.utc) - self.start_time).total_seconds())
         return {
@@ -193,6 +265,10 @@ class WarnBridge:
             "dedup": self.dedup.stats(),
             "db": self.db.stats(),
             "dab": self.dab.status(),
+            "welle_watchdog": {
+                "restart_count": self._welle_restart_count,
+                "last_restart": self._welle_last_restart.isoformat() if self._welle_last_restart else None,
+            },
         }
 
 

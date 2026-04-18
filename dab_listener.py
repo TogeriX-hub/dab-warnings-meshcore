@@ -30,6 +30,16 @@ POLL_INTERVAL = 2.0
 # Maximale Fehler in Folge bevor wir eine Warnung loggen
 MAX_ERRORS_BEFORE_WARN = 5
 
+# Nach dieser Anzahl Fehler in Folge → Watchdog-Signal auslösen
+WATCHDOG_ERROR_THRESHOLD = 10
+
+# Timeout-Einstellungen (getrennt damit hängende TCP-Verbindungen erkannt werden)
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(
+    total=8,        # Gesamtlimit inkl. connect + read
+    connect=3,      # TCP-Verbindungsaufbau max 3s
+    sock_read=5,    # Antwort lesen max 5s
+)
+
 
 class DabListener:
     def __init__(self, config: dict, on_warning: CallbackType):
@@ -52,6 +62,9 @@ class DabListener:
         self._last_poll_ok: bool = False
         self._status: str = "not_started"    # "not_started", "ok", "no_signal", "error"
 
+        # Watchdog: wird von warnbridge.py abgefragt
+        self._watchdog_triggered = False
+
     async def run(self):
         """Läuft dauerhaft, pollt alle POLL_INTERVAL Sekunden."""
         self._running = True
@@ -65,6 +78,21 @@ class DabListener:
                     await self._poll(session)
                 except asyncio.CancelledError:
                     break
+                except asyncio.TimeoutError:
+                    self._error_count += 1
+                    self._last_poll_ok = False
+                    self._status = "error"
+                    if self._error_count <= MAX_ERRORS_BEFORE_WARN:
+                        logger.warning("DAB-Listener: Timeout bei welle-cli (%ds) – Versuch %d",
+                                       int(REQUEST_TIMEOUT.total), self._error_count)
+                    elif self._error_count % 30 == 0:
+                        logger.warning("DAB-Listener: %d Timeouts in Folge – welle-cli hängt?",
+                                       self._error_count)
+                    # Watchdog auslösen wenn Schwelle erreicht
+                    if self._error_count >= WATCHDOG_ERROR_THRESHOLD and not self._watchdog_triggered:
+                        logger.error("DAB-Listener: %d Fehler in Folge – Watchdog ausgelöst",
+                                     self._error_count)
+                        self._watchdog_triggered = True
                 except Exception as e:
                     self._error_count += 1
                     self._last_poll_ok = False
@@ -74,6 +102,10 @@ class DabListener:
                     elif self._error_count % 30 == 0:
                         logger.warning("DAB-Listener: %d Fehler in Folge – welle-cli erreichbar?",
                                        self._error_count)
+                    if self._error_count >= WATCHDOG_ERROR_THRESHOLD and not self._watchdog_triggered:
+                        logger.error("DAB-Listener: %d Fehler in Folge – Watchdog ausgelöst",
+                                     self._error_count)
+                        self._watchdog_triggered = True
                 await asyncio.sleep(POLL_INTERVAL)
 
         self._running = False
@@ -83,15 +115,30 @@ class DabListener:
     def stop(self):
         self._running = False
 
+    def reset_watchdog(self):
+        """Vom Watchdog in warnbridge.py aufgerufen nachdem welle-cli neu gestartet wurde."""
+        self._watchdog_triggered = False
+        self._error_count = 0
+        self._last_change = -1  # Beim Neustart nochmal Initialzustand annehmen
+
+    @property
+    def watchdog_triggered(self) -> bool:
+        return self._watchdog_triggered
+
     async def _poll(self, session: aiohttp.ClientSession):
         """Einmal /mux.json abfragen und ASA-Block auswerten."""
         url = f"{self.welle_url}/mux.json"
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+        async with session.get(url, timeout=REQUEST_TIMEOUT) as resp:
             if resp.status != 200:
                 raise ValueError(f"HTTP {resp.status} von welle-cli")
             data = await resp.json()
 
+        # Erfolgreicher Poll: Zähler und Watchdog zurücksetzen
+        if self._error_count > 0:
+            logger.info("DAB-Listener: welle-cli wieder erreichbar nach %d Fehlern",
+                        self._error_count)
         self._error_count = 0
+        self._watchdog_triggered = False
         self._last_poll_ok = True
 
         # SNR aus demodulator
@@ -167,11 +214,8 @@ class DabListener:
         region_id = asa.get("region_id", 0)
         cluster_id = asa.get("cluster_id", 0)
 
-        # Optionaler Geocode-Filter: wenn konfiguriert, nur passende Regionen weiterleiten
-        # (Im Normalbetrieb leer lassen – SWR BW sendet sowieso nur für BW)
+        # Optionaler Geocode-Filter
         if self.asa_geocode_filter and has_region:
-            # region_id ist ein Integer-Code – ohne Referenztabelle können wir nicht
-            # sicher mappen. Im Zweifel durchlassen.
             logger.debug("DAB+ ASA region_id=%d, geocode_filter=%s – durchgelassen",
                          region_id, self.asa_geocode_filter)
 
@@ -235,4 +279,6 @@ class DabListener:
             "active_since": self._active_since.isoformat() if self._active_since else None,
             "channel": self.cfg.get("channel", "9D"),
             "welle_url": self.welle_url,
+            "error_count": self._error_count,
+            "watchdog_triggered": self._watchdog_triggered,
         }
