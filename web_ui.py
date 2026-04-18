@@ -155,8 +155,13 @@ class WebUI:
         # Dedup-Cache für Test-IDs leeren (damit neue Tests nicht blockiert werden)
         conn2 = self.app.dedup._get_conn()
         conn2.execute("DELETE FROM seen_ids WHERE identifier LIKE 'test-%'")
-        conn2.execute("DELETE FROM seen_hashes WHERE content_hash IN (SELECT content_hash FROM seen_hashes LIMIT 0)")
+        # Alle Hashes löschen die zu Test-IDs gehören:
+        # seen_hashes hat keinen direkten Verweis auf die ID, daher alle Test-Hashes
+        # über den in-memory hour_window ebenfalls resetten
+        conn2.execute("DELETE FROM seen_hashes")
         conn2.commit()
+        # In-memory Stunden-Fenster leeren (sonst blockiert max_per_hour weitere Tests)
+        self.app.dedup._hour_window.clear()
 
         # WebSocket-Broadcast: Dashboard aktualisieren
         await self.ws_broadcast({"event": "sim_cleared"})
