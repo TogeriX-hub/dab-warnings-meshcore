@@ -16,6 +16,7 @@ meshcore:
 nina:
   broadcast_districts:
   - 08115
+  - 08111
   poll_interval_minutes: 5
   region_state: 08
   sources:
@@ -32,14 +33,14 @@ nina:
           enabled: false
           min_level: 2
         hochwasser:
-          enabled: true
+          enabled: false
           min_level: 1
         nebel:
           enabled: false
           min_level: 3
         schnee_schneesturm:
           enabled: true
-          min_level: 2
+          min_level: 3
         starkregen:
           enabled: true
           min_level: 2
