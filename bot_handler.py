@@ -1,7 +1,13 @@
 """
 bot_handler.py – WarnBridge
 Verarbeitet Bot-Befehle aus dem MeshCore-Mesh (oder Dashboard-Simulator).
-Befehle: /details, /warnings [Ort], /status
+Befehle: /details, /warnings [Ort], /status, /help
+
+Nachrichtenlogik:
+- /help    → 1 Nachricht
+- /status  → 1 Nachricht
+- /warnings → max 2 Nachrichten (Header + Liste)
+- /details → max 3 Nachrichten (Header + Gebiet + Beschreibung), alle mit Fallback-Kürzung
 """
 
 import asyncio
@@ -14,74 +20,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Max Zeichen pro Mesh-Nachricht
 MSG_LIMIT = 120
 
-# Verzögerung zwischen Nachrichten
-# Simulator: kurz damit es im Dashboard flüssig aussieht
-# Mesh: 10s Abstand damit der Kanal nicht überflutet wird
 MSG_DELAY_SIMULATOR = 1.0
 MSG_DELAY_MESH = 10.0
 
 SendFn = Callable[[str], Awaitable[bool]]
 
 
-def _chunks(text: str, size: int = MSG_LIMIT) -> list[str]:
-    """Text in Blöcke à max. `size` Zeichen aufteilen."""
-    words = text.split()
-    chunks = []
-    current = ""
-    for word in words:
-        if not current:
-            current = word
-        elif len(current) + 1 + len(word) <= size:
-            current += " " + word
-        else:
-            chunks.append(current)
-            current = word
-    if current:
-        chunks.append(current)
-    return chunks
+def _trunc(text: str, max_len: int = MSG_LIMIT) -> str:
+    """Text auf max_len Zeichen kürzen, mit … wenn nötig."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 1] + "…"
 
 
-def _format_warning_detail(w: dict, index: int, total: int) -> list[str]:
+def _area_short(area_desc: str, max_len: int = 60) -> str:
     """
-    Formatiert eine Warnung als Liste von Mesh-Nachrichten (je max. 120 Zeichen).
+    Gebietsbezeichnung kürzen.
+    Bei mehreren Kreisen: ersten + "u.a." statt alles aufzulisten.
     """
-    lines = []
-
-    # Kopfzeile
-    sev = w.get("severity", "?")
-    src = (w.get("source") or "?").upper()
-    headline = w.get("headline", "–")
-    area = (w.get("area_desc") or "–").split(",")[0].strip()
-    status = " [TEST]" if w.get("status") == "test" else ""
-
-    header = f"[{index}/{total}]{status} {src} {sev} | {headline}"
-    if len(header) > MSG_LIMIT:
-        header = header[:MSG_LIMIT - 1] + "…"
-    lines.append(header)
-
-    # Gebiet
-    area_line = f"Gebiet: {w.get('area_desc', '–')}"
-    if len(area_line) > MSG_LIMIT:
-        area_line = area_line[:MSG_LIMIT - 1] + "…"
-    lines.append(area_line)
-
-    # Beschreibung aufteilen
-    desc = w.get("description", "").strip()
-    if desc:
-        for chunk in _chunks(desc, MSG_LIMIT):
-            lines.append(chunk)
-
-    # Verhaltensempfehlung
-    instr = w.get("instruction", "").strip()
-    if instr:
-        instr_header = "► " + instr
-        for chunk in _chunks(instr_header, MSG_LIMIT):
-            lines.append(chunk)
-
-    return lines
+    if not area_desc:
+        return "–"
+    parts = [p.strip() for p in area_desc.split(",")]
+    if len(parts) == 1:
+        return _trunc(parts[0], max_len)
+    first = _trunc(parts[0], max_len - 5)
+    candidate = f"{first} u.a."
+    if len(candidate) <= max_len:
+        return candidate
+    return _trunc(parts[0], max_len)
 
 
 class BotHandler:
@@ -89,50 +57,38 @@ class BotHandler:
         self.app = app
 
     def _delay(self) -> float:
-        """Verzögerung je nach Modus."""
         if self.app.cfg.get("meshcore", {}).get("simulator", True):
             return MSG_DELAY_SIMULATOR
         return MSG_DELAY_MESH
 
     async def handle(self, command: str, send: SendFn):
-        """
-        Parst und verarbeitet einen Bot-Befehl.
-        send: async Funktion die eine Textnachricht verschickt.
-        """
         cmd = command.strip()
         lower = cmd.lower()
 
         if lower == "/details" or lower.startswith("/details "):
             await self._cmd_details(cmd, send)
-
         elif lower.startswith("/warnings"):
             parts = cmd.split(None, 1)
             ort = parts[1].strip() if len(parts) > 1 else ""
             await self._cmd_warnings(ort, send)
-
         elif lower == "/status":
             await self._cmd_status(send)
-
         elif lower == "/help":
             await self._cmd_help(send)
-
         else:
-            await send(f"Unbekannter Befehl: {cmd} | Hilfe: /help")
+            await send(_trunc(f"Unbekannt: {cmd} | /help"))
 
     async def _send_sequence(self, messages: list[str], send: SendFn):
-        """Nachrichten mit Verzögerung nacheinander senden."""
         delay = self._delay()
         for i, msg in enumerate(messages):
             await send(msg)
             if i < len(messages) - 1:
                 await asyncio.sleep(delay)
 
+    # ------------------------------------------------------------------
+    # /details – max 3 Nachrichten
+    # ------------------------------------------------------------------
     async def _cmd_details(self, cmd: str, send: SendFn):
-        """
-        /details – letzte Warnung aus DB, vollständig aufgeteilt.
-        /details 2 – zweitletzte Warnung.
-        """
-        # Optionale Zahl: /details 2
         parts = cmd.split(None, 1)
         n = 1
         if len(parts) > 1:
@@ -143,96 +99,127 @@ class BotHandler:
 
         warnings = self.app.db.get_latest(n=n)
         if not warnings:
-            await send("Keine Warnungen in den letzten 48h gespeichert.")
+            await send("Keine Warnungen in den letzten 48h.")
             return
 
         w = warnings[-1]
         total = len(self.app.db.get_all_recent(hours=48))
-        msgs = _format_warning_detail(w, n, total)
+        msgs = _format_details(w, n, total)
         await self._send_sequence(msgs, send)
 
+    # ------------------------------------------------------------------
+    # /warnings – max 2 Nachrichten
+    # ------------------------------------------------------------------
     async def _cmd_warnings(self, ort: str, send: SendFn):
-        """
-        /warnings – alle aktiven Warnungen für broadcast_districts
-        /warnings Karlsruhe – Warnungen für den genannten Ort
-        """
         if ort:
-            # AGS-Lookup: Gemeinde/Kreis → district_ags → DB-Abfrage
             district_ags = ags_lookup.find_district(ort)
             if district_ags:
                 warnings = self.app.db.get_active(district_filter=[district_ags])
-                label = f"{ort} ({ags_lookup.district_name(district_ags)})"
+                label = ort
             else:
-                # Fallback: Textsuche in area_desc
                 warnings = self.app.db.get_by_place(ort)
                 label = ort
             if not warnings:
-                await send(f"Keine Warnungen für '{ort}' in den letzten 48h.")
+                await send(_trunc(f"Keine Warnungen fuer '{ort}' (48h)."))
                 return
         else:
-            # Ohne Ort: broadcast_districts
             districts = self.app.cfg.get("nina", {}).get("broadcast_districts", [])
             warnings = self.app.db.get_active(district_filter=districts)
             if not warnings:
-                await send("Keine aktiven Warnungen für deine Region.")
+                await send("Keine aktiven Warnungen fuer deine Region.")
                 return
             label = "deine Region"
 
-        # Kompakte Übersicht: eine Zeile pro Warnung
-        msgs = [f"{len(warnings)} Warnung(en) für {label}:"]
-        for i, w in enumerate(warnings[:5], 1):  # max 5
-            sev = w.get("severity", "?")[:3].upper()
+        # Nachricht 1: Header
+        header = _trunc(f"{len(warnings)} Warnung(en) fuer {label}:")
+
+        # Nachricht 2: kompakte Liste, alles in eine Nachricht
+        lines = []
+        for i, w in enumerate(warnings[:4], 1):
+            sev = (w.get("severity") or "?")[:3].upper()
             src = (w.get("source") or "?").upper()
-            headline = w.get("headline", "–")
-            area = (w.get("area_desc") or "–").split(",")[0].strip()
-            line = f"{i}. [{src}/{sev}] {headline} | {area}"
-            if len(line) > MSG_LIMIT:
-                line = line[:MSG_LIMIT - 1] + "…"
-            msgs.append(line)
+            hl = w.get("headline") or "–"
+            area = _area_short(w.get("area_desc") or "–", max_len=20)
+            line = f"{i}.[{src}/{sev}] {hl[:35]} {area}"
+            lines.append(_trunc(line))
 
-        if len(warnings) > 5:
-            msgs.append(f"... und {len(warnings) - 5} weitere. /details für Volltext.")
+        extra = len(warnings) - 4
+        list_msg = " | ".join(lines)
+        if extra > 0:
+            list_msg = _trunc(list_msg, MSG_LIMIT - 20) + f" +{extra} /details"
+        list_msg = _trunc(list_msg)
 
-        await self._send_sequence(msgs, send)
+        await self._send_sequence([header, list_msg], send)
 
+    # ------------------------------------------------------------------
+    # /status – 1 Nachricht
+    # ------------------------------------------------------------------
     async def _cmd_status(self, send: SendFn):
-        """/status – Systemstatus kompakt."""
         status = self.app.status()
-
         nina = status.get("nina", {})
         mesh = status.get("mesh", {})
         dab = status.get("dab", {})
         db = status.get("db", {})
 
         nina_ok = "OK" if not nina.get("error") and nina.get("running") else "ERR"
+
         dab_status = dab.get("status", "–")
+        snr = dab.get("snr")
         if dab_status == "not_started":
-            dab_str = "Phase 3"
+            dab_str = "P3"
         elif dab_status == "ok":
-            dab_str = "OK"
+            dab_str = f"OK{f'/{snr:.0f}dB' if snr else ''}"
+        elif dab_status == "no_signal":
+            dab_str = "NOSIG"
         else:
-            dab_str = dab_status or "–"
+            dab_str = "ERR"
 
         mesh_str = "SIM" if mesh.get("simulator") else ("OK" if mesh.get("connected") else "ERR")
         uptime = status.get("uptime_human", "–")
-        warnings_count = db.get("active_warnings", 0)
+        warn_count = db.get("active_warnings", 0)
         last_poll = nina.get("last_poll")
-        poll_str = last_poll[11:16] if last_poll else "–"  # HH:MM aus ISO
+        poll_str = last_poll[11:16] if last_poll else "–"
 
-        line1 = f"WarnBridge | DAB+:{dab_str} NINA:{nina_ok} Mesh:{mesh_str}"
-        line2 = f"Uptime:{uptime} | Warnungen:{warnings_count} | Poll:{poll_str}"
+        msg = f"DAB+:{dab_str} NINA:{nina_ok} {poll_str} Mesh:{mesh_str} Up:{uptime} Warn:{warn_count}"
+        await send(_trunc(msg))
 
-        if len(line1) > MSG_LIMIT:
-            line1 = line1[:MSG_LIMIT - 1] + "…"
-        if len(line2) > MSG_LIMIT:
-            line2 = line2[:MSG_LIMIT - 1] + "…"
-
-        await self._send_sequence([line1, line2], send)
-
+    # ------------------------------------------------------------------
+    # /help – 1 Nachricht
+    # ------------------------------------------------------------------
     async def _cmd_help(self, send: SendFn):
-        """/help – verfügbare Befehle."""
-        await self._send_sequence([
-            "/details – Letzte Warnung vollständig",
-            "/warnings [Ort] – Warnungen für Ort oder deine Region",
-            "/status – Systemstatus",
-        ], send)
+        await send("/details [n] /warnings [Ort] /status – WarnBridge")
+
+
+# ------------------------------------------------------------------
+# Hilfsfunktion: /details Nachrichten aufbauen (max 3)
+# ------------------------------------------------------------------
+def _format_details(w: dict, index: int, total: int) -> list[str]:
+    """
+    Baut max. 3 Nachrichten für /details.
+    1. Header: Index + Quelle + Severity + Headline
+    2. Gebiet
+    3. Beschreibung (max 120 Zeichen, gekürzt)
+    Instruction wird weggelassen.
+    """
+    msgs = []
+
+    sev = w.get("severity", "?")
+    src = (w.get("source") or "?").upper()
+    headline = w.get("headline") or "–"
+    status = w.get("status", "actual")
+    test_prefix = "[TEST] " if status == "test" else ""
+
+    # Nachricht 1: Header
+    header = _trunc(f"[{index}/{total}] {test_prefix}{src} {sev} | {headline}")
+    msgs.append(header)
+
+    # Nachricht 2: Gebiet
+    area = _area_short(w.get("area_desc") or "–", max_len=MSG_LIMIT - len("Gebiet: "))
+    msgs.append(_trunc(f"Gebiet: {area}"))
+
+    # Nachricht 3: Beschreibung (nur wenn vorhanden)
+    desc = (w.get("description") or "").strip()
+    if desc:
+        msgs.append(_trunc(desc))
+
+    return msgs
