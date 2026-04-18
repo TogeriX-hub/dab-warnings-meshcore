@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WarnBridge Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --bg:       #0d0f12;
+    --surface:  #151820;
+    --border:   #1e2430;
+    --text:     #c8d0dc;
+    --muted:    #4a5568;
+    --accent:   #f5a623;
+    --red:      #e05252;
+    --green:    #4caf7d;
+    --blue:     #5b9cf6;
+    --yellow:   #f5c842;
+    --mono:     'IBM Plex Mono', monospace;
+    --sans:     'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; line-height: 1.5; min-height: 100vh; }
+
+  /* Header */
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .header-left { display: flex; align-items: center; gap: 12px; flex: 1; }
+  header .logo { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0.05em; }
+  header .sep { color: var(--border); }
+  header .subtitle { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  #sim-badge { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: #2a2000; color: var(--accent); border: 1px solid #5a3800; display: none; }
+  #sim-badge.active { display: block; }
+  #conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+  #conn-dot.ok { background: var(--green); }
+  #conn-dot.err { background: var(--red); }
+
+  /* Tabs */
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); padding: 0 20px; }
+  .tab { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 9px 16px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; user-select: none; white-space: nowrap; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .setup-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); margin-left: 6px; vertical-align: middle; display: none; }
+
+  /* Tab Content */
+  .tab-content { display: none; height: calc(100vh - 90px); overflow: hidden; }
+  .tab-content.active { display: flex; }
+
+  /* Monitor Grid */
+  .monitor-grid { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; gap: 1px; background: var(--border); width: 100%; }
+  .panel { background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
+  .panel-title { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 10px 14px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .panel-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
+  .panel-body::-webkit-scrollbar { width: 4px; }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .stat-value { font-family: var(--mono); font-size: 11px; color: var(--text); text-align: right; }
+  .stat-value.ok { color: var(--green); }
+  .stat-value.warn { color: var(--yellow); }
+  .stat-value.err { color: var(--red); }
+  .stat-value.dim { color: var(--muted); }
+
+  /* Simulator */
+  .sim-output { flex: 1; overflow-y: auto; font-family: var(--mono); font-size: 11px; padding: 8px 14px; min-height: 0; }
+  .sim-output::-webkit-scrollbar { width: 4px; }
+  .sim-output::-webkit-scrollbar-thumb { background: var(--border); }
+  .sim-msg { padding: 4px 0; border-bottom: 1px solid var(--border); word-break: break-all; }
+  .sim-msg:last-child { border-bottom: none; }
+  .sim-msg .time { color: var(--muted); font-size: 10px; margin-right: 6px; }
+  .sim-msg .len { color: var(--muted); font-size: 10px; margin-left: 4px; }
+  .sim-msg .text { color: var(--accent); }
+  .sim-msg.reply .text { color: var(--blue); }
+  .sim-msg.command .text { color: var(--muted); font-style: italic; }
+  .sim-footer { border-top: 1px solid var(--border); padding: 8px 14px; flex-shrink: 0; }
+  .sim-input-row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .sim-input { flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 5px 8px; border-radius: 3px; outline: none; opacity: 0.4; cursor: not-allowed; }
+  .sim-input.active { opacity: 1; cursor: text; }
+  .sim-input.active:focus { border-color: var(--blue); }
+  .sim-note { font-family: var(--mono); font-size: 9px; color: var(--muted); text-align: center; margin-top: 4px; }
+
+  /* Warnings */
+  .warn-card { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; overflow: hidden; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+  .warn-card.Extreme { border-left: 3px solid var(--red); }
+  .warn-card.Severe  { border-left: 3px solid var(--yellow); }
+  .warn-card.Moderate { border-left: 3px solid var(--blue); }
+  .warn-card.Minor   { border-left: 3px solid var(--muted); }
+  .warn-header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); cursor: pointer; user-select: none; }
+  .warn-header:hover { background: #1a1e28; }
+  .sev-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 2px; text-transform: uppercase; flex-shrink: 0; }
+  .sev-badge.Extreme { background: #3d1111; color: var(--red); }
+  .sev-badge.Severe  { background: #2d2200; color: var(--yellow); }
+  .sev-badge.Moderate { background: #0d1e3a; color: var(--blue); }
+  .sev-badge.Minor   { background: #1a1a1a; color: var(--muted); }
+  .src-badge { font-family: var(--mono); font-size: 9px; padding: 2px 5px; border-radius: 2px; background: #1a1e28; color: var(--muted); border: 1px solid var(--border); flex-shrink: 0; }
+  .warn-headline { font-size: 12px; font-weight: 500; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warn-time { font-family: var(--mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .broadcast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+  .warn-body { padding: 10px 12px; display: none; border-top: 1px solid var(--border); }
+  .warn-body.open { display: block; }
+  .warn-field { margin-bottom: 8px; }
+  .warn-field-label { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 2px; }
+  .warn-field-value { font-size: 12px; color: var(--text); line-height: 1.4; }
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .empty-state .icon { font-size: 28px; margin-bottom: 8px; }
+
+  /* Config Tab */
+  .config-content { width: 100%; overflow-y: auto; padding: 24px; }
+  .config-content::-webkit-scrollbar { width: 4px; }
+  .config-content::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .setup-banner { background: #1a1200; border: 1px solid #5a3800; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
+  .setup-banner.hidden { display: none; }
+  .setup-banner .icon { font-size: 22px; flex-shrink: 0; }
+  .setup-banner .title { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
+  .setup-banner .desc { color: var(--muted); font-size: 12px; }
+
+  .config-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .config-section { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .config-section.full-width { grid-column: 1 / -1; }
+  .config-section-title { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .config-body { padding: 14px; }
+
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px; }
+  .field input, .field select { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 12px; padding: 6px 9px; border-radius: 3px; outline: none; appearance: none; }
+  .field input:focus, .field select:focus { border-color: var(--blue); }
+  .field .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .toggle-row:last-child { border-bottom: none; }
+  .toggle-label { font-size: 12px; color: var(--text); }
+  .toggle-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .level-select { background: var(--bg); border: 1px solid var(--border); color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px; border-radius: 3px; outline: none; }
+  .level-select:disabled { opacity: 0.3; }
+
+  .switch { position: relative; display: inline-block; width: 32px; height: 18px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top:0; left:0; right:0; bottom:0; background: var(--border); border-radius: 18px; transition: 0.2s; }
+  .slider:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; bottom: 3px; background: var(--muted); border-radius: 50%; transition: 0.2s; }
+  input:checked + .slider { background: #1a3a20; }
+  input:checked + .slider:before { transform: translateX(14px); background: var(--green); }
+
+  .district-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-height: 28px; }
+  .district-tag { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: #0d1e3a; color: var(--blue); border: 1px solid #1a3a6a; display: flex; align-items: center; gap: 5px; }
+  .district-tag .remove { cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; }
+  .district-tag .remove:hover { color: var(--red); }
+  .add-district-row { display: flex; gap: 6px; margin-top: 8px; }
+  .add-district-row select { flex: 1; }
+
+  .btn { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 6px 12px; border: 1px solid; border-radius: 3px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; background: transparent; transition: background 0.15s, color 0.15s; white-space: nowrap; }
+  .btn-primary { border-color: var(--accent); color: var(--accent); }
+  .btn-primary:hover { background: var(--accent); color: var(--bg); }
+  .btn-green { border-color: var(--green); color: var(--green); }
+  .btn-green:hover { background: var(--green); color: var(--bg); }
+  .btn-send { border-color: var(--blue); color: var(--blue); }
+  .btn-send:hover:not(:disabled) { background: var(--blue); color: var(--bg); }
+  .btn-send:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-test { border-color: var(--accent); color: var(--accent); width: 100%; }
+  .btn-test:hover { background: var(--accent); color: var(--bg); }
+
+  .save-row { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .save-status { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .save-status.ok { color: var(--green); }
+  .save-status.err { color: var(--red); }
+
+  @media (max-width: 700px) {
+    .config-sections { grid-template-columns: 1fr; }
+    .config-section.full-width { grid-column: 1; }
+    .monitor-grid { grid-template-columns: 1fr; height: auto; }
+    #panel-warnings { grid-column: 1; grid-row: 2; min-height: 300px; }
+    #panel-sim { grid-column: 1; grid-row: 3; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="logo">WarnBridge</div>
+    <div class="sep">|</div>
+    <div class="subtitle">DAB+ → MeshCore</div>
+    <div id="sim-badge">SIMULATOR</div>
+  </div>
+  <div id="conn-dot" title="WebSocket"></div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('monitor')">Monitor</div>
+  <div class="tab" id="tab-config-btn" onclick="switchTab('config')">
+    Konfiguration
+    <span class="setup-dot" id="setup-dot"></span>
+  </div>
+</div>
+
+<!-- ══ MONITOR ══ -->
+<div class="tab-content active" id="tab-monitor">
+  <div class="monitor-grid">
+
+    <div class="panel">
+      <div class="panel-title">Systemstatus</div>
+      <div class="panel-body">
+        <div class="stat-row"><span class="stat-label">DAB+</span><span class="stat-value dim" id="st-dab">–</span></div>
+        <div class="stat-row"><span class="stat-label">Kanal</span><span class="stat-value" id="st-channel">–</span></div>
+        <div class="stat-row"><span class="stat-label">NINA API</span><span class="stat-value" id="st-nina">–</span></div>
+        <div class="stat-row"><span class="stat-label">Letzter Poll</span><span class="stat-value" id="st-poll">–</span></div>
+        <div class="stat-row"><span class="stat-label">MeshCore</span><span class="stat-value" id="st-mesh">–</span></div>
+        <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" id="st-uptime">–</span></div>
+        <div class="stat-row"><span class="stat-label">Warnungen (48h)</span><span class="stat-value" id="st-warnings">–</span></div>
+        <div class="stat-row"><span class="stat-label">Dedup Cache</span><span class="stat-value" id="st-dedup">–</span></div>
+        <div class="stat-row"><span class="stat-label">Gesendet (1h)</span><span class="stat-value" id="st-sent">–</span></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-sim">
+      <div class="panel-title">Simulator / Mesh-Output</div>
+      <div class="sim-output" id="sim-output">
+        <div class="sim-msg" style="color:var(--muted);font-size:10px;padding:6px 0">Warte auf Verbindung...</div>
+      </div>
+      <div class="sim-footer">
+        <div class="sim-input-row">
+          <input class="sim-input" id="sim-input" type="text" placeholder="/details · /warnings Böblingen · /status · /help" disabled>
+          <button class="btn btn-send" id="btn-send" disabled>Send</button>
+        </div>
+        <button class="btn btn-test" onclick="triggerTest()">⚡ Testwarnung auslösen</button>
+        <button class="btn" id="btn-clear" onclick="clearSimulator()" style="border-color:var(--red);color:var(--red);width:100%;margin-top:6px;display:none">🗑 Simulator & Testwarnungen leeren</button>
+        <div class="sim-note" id="sim-note">Simulator nicht aktiv</div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-warnings">
+      <div class="panel-title" id="warnings-title">Warnungen (48h) – 0</div>
+      <div class="panel-body" id="warnings-list">
+        <div class="empty-state"><div class="icon">📡</div>Keine Warnungen in den letzten 48h</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ CONFIG ══ -->
+<div class="tab-content" id="tab-config">
+  <div class="config-content">
+
+    <div class="setup-banner hidden" id="setup-banner">
+      <div class="icon">⚙️</div>
+      <div>
+        <div class="title">Ersteinrichtung erforderlich</div>
+        <div class="desc">Bitte konfiguriere mindestens Bundesland und Broadcast-Kreise, damit WarnBridge weiß wohin automatische Alarme gesendet werden.</div>
+      </div>
+    </div>
+
+    <div class="config-sections">
+
+      <!-- Region -->
+      <div class="config-section">
+        <div class="config-section-title">🗺️ Region</div>
+        <div class="config-body">
+          <div class="field">
+            <label>Bundesland</label>
+            <select id="cfg-state" onchange="onStateChange()"><option value="">Wird geladen...</option></select>
+            <div class="hint">Alle Kreise dieses Bundeslands werden von der NINA API abgefragt und gespeichert.</div>
+          </div>
+          <div class="field">
+            <label>Broadcast-Kreise <span style="font-weight:400;text-transform:none;letter-spacing:0">(automatischer Mesh-Alert)</span></label>
+            <div class="district-list" id="district-tags"><span style="color:var(--muted);font-size:11px">Noch keine Kreise ausgewählt</span></div>
+            <div class="add-district-row">
+              <select id="district-select"><option value="">Kreis auswählen...</option></select>
+              <button class="btn btn-primary" onclick="addDistrict()">+ Add</button>
+            </div>
+            <div class="hint">Nur für diese Kreise wird automatisch ein Mesh-Alert ausgelöst. Andere Kreise werden nur gespeichert (abrufbar per /warnings).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MeshCore -->
+      <div class="config-section">
+        <div class="config-section-title">📡 MeshCore</div>
+        <div class="config-body">
+          <div class="field">
+            <label>Host (IP des Heltec)</label>
+            <input type="text" id="cfg-mc-host" placeholder="192.168.4.1">
+          </div>
+          <div class="field">
+            <label>Port</label>
+            <input type="number" id="cfg-mc-port" placeholder="4403">
+          </div>
+          <div class="field">
+            <label>Channel Index (0–7)</label>
+            <input type="number" id="cfg-mc-channel" min="0" max="7" placeholder="0">
+            <div class="hint">Kanal auf dem WarnBridge Warnungen sendet.</div>
+          </div>
+          <div class="field">
+            <label>Scope</label>
+            <input type="text" id="cfg-mc-scope" placeholder="*">
+            <div class="hint">* = ganzes Mesh (Flood). #RegionName = regionaler Scope (ab Firmware v1.10.0).</div>
+          </div>
+          <div class="field">
+            <label>Simulator-Modus</label>
+            <div class="toggle-row" style="border:none;padding:4px 0">
+              <span style="font-size:11px;color:var(--muted)">Nachrichten ins Dashboard statt ins Mesh</span>
+              <label class="switch"><input type="checkbox" id="cfg-mc-sim"><span class="slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DAB+ -->
+      <div class="config-section">
+        <div class="config-section-title">📻 DAB+</div>
+        <div class="config-body">
+          <div class="field">
+            <label>welle-cli URL</label>
+            <input type="text" id="cfg-dab-url" placeholder="http://localhost:7979">
+          </div>
+          <div class="field">
+            <label>DAB+ Kanal</label>
+            <input type="text" id="cfg-dab-channel" placeholder="9D">
+            <div class="hint">9D = SWR BW Nord, 208.064 MHz</div>
+          </div>
+          <div class="field">
+            <label>ASA Geocode (optional)</label>
+            <input type="text" id="cfg-dab-geocode" placeholder="z.B. DE-BW oder leer lassen">
+            <div class="hint">Zur regionalen Filterung des DAB+ ASA-Signals. Beim Warntag überträgt SWR BW möglicherweise einen Code für ganz BW.</div>
+          </div>
+          <div class="field">
+            <label>Probewarnungen weiterleiten</label>
+            <div class="toggle-row" style="border:none;padding:4px 0">
+              <span style="font-size:11px;color:var(--muted)">[TEST]-Meldungen ins Mesh senden</span>
+              <label class="switch"><input type="checkbox" id="cfg-dab-fwdtest"><span class="slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NINA -->
+      <div class="config-section">
+        <div class="config-section-title">🌐 NINA API</div>
+        <div class="config-body">
+          <div class="field">
+            <label>Poll-Intervall (Minuten)</label>
+            <input type="number" id="cfg-nina-poll" min="5" max="60" placeholder="15">
+          </div>
+          <div class="field">
+            <label>MoWaS aktiviert</label>
+            <div class="toggle-row" style="border:none;padding:4px 0">
+              <span style="font-size:11px;color:var(--muted)">Modulares Warnsystem (BBK)</span>
+              <label class="switch"><input type="checkbox" id="cfg-mowas-en"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="field">
+            <label>MoWaS Mindest-Schwere</label>
+            <select id="cfg-mowas-sev">
+              <option value="Extreme">Extreme – nur höchste Stufe</option>
+              <option value="Severe">Severe – Stufe 2+</option>
+              <option value="Moderate">Moderate – alle Warnungen</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>LHP (Hochwasserpegel)</label>
+            <div class="toggle-row" style="border:none;padding:4px 0">
+              <span style="font-size:11px;color:var(--muted)">Länderübergreifendes Hochwasserportal</span>
+              <label class="switch"><input type="checkbox" id="cfg-lhp-en"><span class="slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DWD -->
+      <div class="config-section full-width">
+        <div class="config-section-title">⛈️ DWD Warnfilter</div>
+        <div class="config-body" id="dwd-toggles"></div>
+      </div>
+
+    </div>
+
+    <div class="save-row">
+      <button class="btn btn-green" onclick="saveConfig()">💾 Konfiguration speichern</button>
+      <span class="save-status" id="save-status"></span>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+let ws = null, isSimulator = false, retryDelay = 2000;
+let cfg = {}, allDistricts = [], selectedDistricts = [];
+
+const DWD_EVENTS = [
+  { key:'gewitter',           label:'Gewitter',         levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'sturm_orkan',        label:'Sturm / Orkan',    levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'starkregen',         label:'Starkregen',       levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'hochwasser',         label:'Hochwasser',       levels:['Stufe 1','Stufe 2','Stufe 3','Stufe 4'] },
+  { key:'schnee_schneesturm', label:'Schnee / Sturm',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'glaette_frost',      label:'Glätte / Frost',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'hitze',              label:'Hitze',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'nebel',              label:'Nebel',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+];
+
+// ── Tabs ──────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[onclick="switchTab('${name}')"]`).classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol==='https:'?'wss':'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { document.getElementById('conn-dot').className='ok'; retryDelay=2000; };
+  ws.onmessage = e => { try { handleWsMessage(JSON.parse(e.data)); } catch(err){} };
+  ws.onclose = () => { document.getElementById('conn-dot').className='err'; setTimeout(connectWS,retryDelay); retryDelay=Math.min(retryDelay*1.5,30000); };
+  ws.onerror = () => ws.close();
+}
+
+function handleWsMessage(msg) {
+  if (msg.event==='connected') { isSimulator=msg.data.simulator; updateSimUI(); }
+  else if (msg.event==='simulator_out') appendSimMsg(msg.data);
+  else if (msg.event==='new_warning') { loadWarnings(); loadStatus(); }
+  else if (msg.event==='sim_cleared') {
+    document.getElementById('sim-output').innerHTML='<div class="sim-msg" style="color:var(--muted);font-size:10px;padding:6px 0">Simulator geleert.</div>';
+    loadWarnings();
+  }
+}
+
+// ── Polling ───────────────────────────────────────────────────────────
+function startPolling() {
+  loadStatus(); loadWarnings(); loadSent();
+  setInterval(()=>{ loadStatus(); loadWarnings(); loadSent(); }, 10000);
+}
+async function loadStatus() { try { const r=await fetch('/api/status'); if(r.ok) applyStatus(await r.json()); }catch(e){} }
+async function loadWarnings() { try { const r=await fetch('/api/warnings'); if(r.ok) renderWarnings(await r.json()); }catch(e){} }
+async function loadSent() { try { const r=await fetch('/api/sent'); if(r.ok) renderSent(await r.json()); }catch(e){} }
+
+// ── Status ────────────────────────────────────────────────────────────
+function applyStatus(s) {
+  const dab=s.dab||{}, nina=s.nina||{}, mesh=s.mesh||{};
+  const dabEl=document.getElementById('st-dab');
+  if(dab.status==='ok'){dabEl.textContent='OK';dabEl.className='stat-value ok';}
+  else if(dab.status==='not_started'){dabEl.textContent='Phase 3';dabEl.className='stat-value dim';}
+  else{dabEl.textContent=dab.status||'–';dabEl.className='stat-value warn';}
+  setText('st-channel',dab.channel||'–');
+  const ninaEl=document.getElementById('st-nina');
+  if(nina.error){ninaEl.textContent='Fehler';ninaEl.className='stat-value err';}
+  else if(nina.running){ninaEl.textContent='OK';ninaEl.className='stat-value ok';}
+  else{ninaEl.textContent='–';ninaEl.className='stat-value dim';}
+  setText('st-poll',nina.last_poll?new Date(nina.last_poll).toLocaleTimeString('de-DE'):'–');
+  const meshEl=document.getElementById('st-mesh');
+  if(mesh.simulator){meshEl.textContent='Simulator';meshEl.className='stat-value warn';}
+  else if(mesh.connected){meshEl.textContent='Verbunden';meshEl.className='stat-value ok';}
+  else{meshEl.textContent='Getrennt';meshEl.className='stat-value err';}
+  setText('st-uptime',s.uptime_human||'–');
+  setText('st-warnings',(s.db||{}).active_warnings??'–');
+  setText('st-dedup',`${(s.dedup||{}).cached_ids||0} IDs`);
+  setText('st-sent',`${(s.dedup||{}).sent_last_hour||0} / ${(s.dedup||{}).max_per_hour||5}`);
+  isSimulator=mesh.simulator; updateSimUI();
+}
+function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
+
+// ── Warnings ──────────────────────────────────────────────────────────
+function renderWarnings(warnings) {
+  const container=document.getElementById('warnings-list');
+  document.getElementById('warnings-title').textContent=`Warnungen (48h) – ${warnings.length}`;
+  if(!warnings.length){container.innerHTML=`<div class="empty-state"><div class="icon">📡</div>Keine Warnungen in den letzten 48h</div>`;return;}
+  container.innerHTML=warnings.map((w,i)=>`
+    <div class="warn-card ${escHtml(w.severity||'Minor')}">
+      <div class="warn-header" onclick="toggleCard(${i})">
+        <span class="sev-badge ${escHtml(w.severity||'Minor')}">${escHtml(w.severity||'?')}</span>
+        <span class="src-badge">${escHtml((w.source||'').toUpperCase())}</span>
+        ${w.broadcast_sent?'<div class="broadcast-dot" title="Ins Mesh gesendet"></div>':''}
+        <span class="warn-headline">${escHtml(w.headline||'–')}</span>
+        <span class="warn-time">${w.stored_at?new Date(w.stored_at).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):''}</span>
+        <span style="color:var(--muted);font-size:10px;margin-left:4px">▾</span>
+      </div>
+      <div class="warn-body" id="wbody-${i}">
+        <div class="warn-field"><div class="warn-field-label">Gebiet</div><div class="warn-field-value">${escHtml(w.area_desc||'–')}</div></div>
+        ${w.description?`<div class="warn-field"><div class="warn-field-label">Beschreibung</div><div class="warn-field-value">${escHtml(w.description)}</div></div>`:''}
+        ${w.instruction?`<div class="warn-field"><div class="warn-field-label">Verhaltensempfehlung</div><div class="warn-field-value">${escHtml(w.instruction)}</div></div>`:''}
+        <div class="warn-field"><div class="warn-field-label">ID</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${escHtml(w.identifier||'–')}</div></div>
+      </div>
+    </div>`).join('');
+}
+function toggleCard(i){document.getElementById(`wbody-${i}`)?.classList.toggle('open');}
+
+// ── Simulator ─────────────────────────────────────────────────────────
+function renderSent(msgs) {
+  if(!msgs.length)return;
+  document.getElementById('sim-output').innerHTML=msgs.slice(0,50).map(m=>`
+    <div class="sim-msg ${m.type==='reply'?'reply':m.type==='command'?'command':''}">
+      <span class="time">${escHtml(m.time||'')}</span><span class="text">${escHtml(m.text||'')}</span><span class="len">[${m.length||0}]</span>
+    </div>`).join('');
+}
+function appendSimMsg(m) {
+  const c=document.getElementById('sim-output');
+  const ph=c.querySelector('.sim-msg'); if(ph&&ph.style.color)ph.remove();
+  const div=document.createElement('div');
+  div.className=`sim-msg ${m.type==='reply'?'reply':m.type==='command'?'command':''}`;
+  div.innerHTML=`<span class="time">${escHtml(m.time||'')}</span><span class="text">${escHtml(m.text||'')}</span><span class="len">[${m.length||0}]</span>`;
+  c.insertBefore(div,c.firstChild);
+}
+function updateSimUI() {
+  const badge=document.getElementById('sim-badge'), note=document.getElementById('sim-note');
+  const input=document.getElementById('sim-input'), btnSend=document.getElementById('btn-send');
+  if (isSimulator) {
+    badge.classList.add('active');
+    note.textContent='/details · /warnings Böblingen · /status · /help';
+    input.disabled=false; input.classList.add('active'); btnSend.disabled=false;
+    document.getElementById('btn-clear').style.display='block';
+  } else {
+    badge.classList.remove('active');
+    note.textContent='Produktivmodus – Nachrichten gehen ins Mesh';
+    input.disabled=true; input.classList.remove('active'); btnSend.disabled=true;
+    document.getElementById('btn-clear').style.display='none';
+  }
+}
+function sendBotCommand() {
+  const input=document.getElementById('sim-input'), cmd=input.value.trim();
+  if(!cmd||!ws||ws.readyState!==WebSocket.OPEN)return;
+  appendSimMsg({time:new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),type:'command',text:'> '+cmd,length:cmd.length});
+  ws.send(JSON.stringify({type:'bot_command',command:cmd}));
+  input.value='';
+}
+document.getElementById('btn-send').addEventListener('click',sendBotCommand);
+document.getElementById('sim-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendBotCommand();});
+async function triggerTest() {
+  const btn=document.getElementById('btn-test');
+  btn.disabled=true; btn.textContent='Wird ausgelöst...';
+  try {
+    const r=await fetch('/api/simulator/trigger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'nina'})});
+    const d=await r.json();
+    btn.textContent=d.ok?'✓ Gesendet':d.error||'Fehler';
+    setTimeout(()=>{btn.textContent='⚡ Testwarnung auslösen';btn.disabled=false;},2000);
+    if(d.ok){loadWarnings();loadSent();}
+  }catch(e){btn.textContent='Fehler';setTimeout(()=>{btn.textContent='⚡ Testwarnung auslösen';btn.disabled=false;},3000);}
+}
+
+async function clearSimulator() {
+  const btn=document.getElementById('btn-clear');
+  btn.disabled=true; btn.textContent='Wird geleert...';
+  try {
+    const r=await fetch('/api/simulator/clear',{method:'POST'});
+    const d=await r.json();
+    if(d.ok){
+      btn.textContent=`✓ Geleert (${d.deleted} Warnungen)`;
+    } else {
+      btn.textContent=d.error||'Fehler';
+    }
+    setTimeout(()=>{btn.textContent='🗑 Simulator & Testwarnungen leeren';btn.disabled=false;},2000);
+  }catch(e){btn.textContent='Fehler';setTimeout(()=>{btn.textContent='🗑 Simulator & Testwarnungen leeren';btn.disabled=false;},3000);}
+}
+
+// ── Config ────────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const r=await fetch('/api/config'); if(!r.ok)return;
+    cfg=await r.json();
+    applyConfigToUI();
+    checkFirstRun();
+  }catch(e){}
+}
+
+async function loadStates() {
+  try {
+    const r=await fetch('/api/ags/states'); if(!r.ok)return;
+    const states=await r.json();
+    const sel=document.getElementById('cfg-state');
+    sel.innerHTML=states.map(s=>`<option value="${escHtml(s.ags)}">${escHtml(s.name)}</option>`).join('');
+    const current=String(cfg.nina?.region_state||'08').padStart(2,'0');
+    sel.value=current;
+    await loadDistricts(current);
+  }catch(e){}
+}
+
+async function loadDistricts(stateAgs) {
+  try {
+    const r=await fetch(`/api/ags/districts?state=${stateAgs}`); if(!r.ok)return;
+    allDistricts=await r.json();
+    renderDistrictSelect();
+    renderDistrictTags();
+  }catch(e){}
+}
+
+async function onStateChange() {
+  await loadDistricts(document.getElementById('cfg-state').value);
+}
+
+function renderDistrictSelect() {
+  document.getElementById('district-select').innerHTML=
+    '<option value="">Kreis auswählen...</option>'+
+    allDistricts.map(d=>`<option value="${escHtml(d.ags)}">${escHtml(d.name)}</option>`).join('');
+}
+
+function renderDistrictTags() {
+  const c=document.getElementById('district-tags');
+  if(!selectedDistricts.length){c.innerHTML='<span style="color:var(--muted);font-size:11px">Noch keine Kreise ausgewählt</span>';return;}
+  c.innerHTML=selectedDistricts.map(ags=>{
+    const info=allDistricts.find(d=>d.ags===ags);
+    const name=info?info.name:ags;
+    return `<div class="district-tag">${escHtml(name)} <span style="color:var(--muted);font-size:9px">${escHtml(ags)}</span><span class="remove" onclick="removeDistrict('${escHtml(ags)}')">×</span></div>`;
+  }).join('');
+}
+
+function addDistrict() {
+  const sel=document.getElementById('district-select'), ags=sel.value;
+  if(!ags||selectedDistricts.includes(ags))return;
+  selectedDistricts.push(ags); sel.value=''; renderDistrictTags();
+}
+function removeDistrict(ags) { selectedDistricts=selectedDistricts.filter(d=>d!==ags); renderDistrictTags(); }
+
+function applyConfigToUI() {
+  const mc=cfg.meshcore||{}, dab=cfg.dab||{}, nina=cfg.nina||{};
+  document.getElementById('cfg-mc-host').value=mc.host||'192.168.4.1';
+  document.getElementById('cfg-mc-port').value=mc.port||4403;
+  document.getElementById('cfg-mc-channel').value=mc.channel_idx??0;
+  document.getElementById('cfg-mc-scope').value=mc.scope||'*';
+  document.getElementById('cfg-mc-sim').checked=mc.simulator??true;
+  document.getElementById('cfg-dab-url').value=dab.welle_cli_url||'http://localhost:7979';
+  document.getElementById('cfg-dab-channel').value=dab.channel||'9D';
+  document.getElementById('cfg-dab-geocode').value=dab.asa_geocode||'';
+  document.getElementById('cfg-dab-fwdtest').checked=dab.forward_tests??false;
+  document.getElementById('cfg-nina-poll').value=nina.poll_interval_minutes||15;
+  document.getElementById('cfg-mowas-sev').value=nina.sources?.mowas?.min_severity||'Severe';
+  document.getElementById('cfg-mowas-en').checked=nina.sources?.mowas?.enabled??true;
+  document.getElementById('cfg-lhp-en').checked=nina.sources?.lhp?.enabled??false;
+  selectedDistricts=(nina.broadcast_districts||[]).map(String);
+  renderDwdToggles();
+}
+
+function renderDwdToggles() {
+  const events=cfg.nina?.sources?.dwd?.events||{};
+  document.getElementById('dwd-toggles').innerHTML=DWD_EVENTS.map(ev=>{
+    const ec=events[ev.key]||{}, enabled=ec.enabled??false, level=ec.min_level??2;
+    return `<div class="toggle-row">
+      <span class="toggle-label">${escHtml(ev.label)}</span>
+      <div class="toggle-right">
+        <select class="level-select" id="dwd-level-${ev.key}" ${!enabled?'disabled':''}>
+          ${ev.levels.map((l,i)=>`<option value="${i+1}"${level===i+1?' selected':''}>${escHtml(l)}</option>`).join('')}
+        </select>
+        <label class="switch">
+          <input type="checkbox" id="dwd-en-${ev.key}" ${enabled?'checked':''} onchange="onDwdToggle('${ev.key}')">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onDwdToggle(key) {
+  document.getElementById(`dwd-level-${key}`).disabled=!document.getElementById(`dwd-en-${key}`).checked;
+}
+
+function checkFirstRun() {
+  const districts=cfg.nina?.broadcast_districts||[];
+  const isFirst=districts.length===0;
+  document.getElementById('setup-banner').classList.toggle('hidden',!isFirst);
+  document.getElementById('setup-dot').style.display=isFirst?'inline-block':'none';
+  if(isFirst) switchTab('config');
+}
+
+async function saveConfig() {
+  const statusEl=document.getElementById('save-status');
+  statusEl.textContent='Speichern...'; statusEl.className='save-status';
+  const dwdEvents={};
+  DWD_EVENTS.forEach(ev=>{
+    dwdEvents[ev.key]={
+      enabled:document.getElementById(`dwd-en-${ev.key}`).checked,
+      min_level:parseInt(document.getElementById(`dwd-level-${ev.key}`).value),
+    };
+  });
+  const newCfg={
+    meshcore:{
+      host:document.getElementById('cfg-mc-host').value,
+      port:parseInt(document.getElementById('cfg-mc-port').value),
+      channel_idx:parseInt(document.getElementById('cfg-mc-channel').value),
+      scope:document.getElementById('cfg-mc-scope').value,
+      simulator:document.getElementById('cfg-mc-sim').checked,
+    },
+    dab:{
+      welle_cli_url:document.getElementById('cfg-dab-url').value,
+      channel:document.getElementById('cfg-dab-channel').value,
+      asa_geocode:document.getElementById('cfg-dab-geocode').value,
+      forward_tests:document.getElementById('cfg-dab-fwdtest').checked,
+    },
+    nina:{
+      region_state:document.getElementById('cfg-state').value,
+      poll_interval_minutes:parseInt(document.getElementById('cfg-nina-poll').value),
+      broadcast_districts:selectedDistricts,
+      sources:{
+        mowas:{enabled:document.getElementById('cfg-mowas-en').checked,min_severity:document.getElementById('cfg-mowas-sev').value},
+        dwd:{enabled:true,events:dwdEvents},
+        lhp:{enabled:document.getElementById('cfg-lhp-en').checked},
+      },
+    },
+  };
+  try {
+    const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(newCfg)});
+    const d=await r.json();
+    if(d.ok){
+      statusEl.textContent='✓ Gespeichert – Poll gestartet'; statusEl.className='save-status ok';
+      cfg={...cfg,...newCfg};
+      document.getElementById('setup-banner').classList.add('hidden');
+      document.getElementById('setup-dot').style.display='none';
+    } else { statusEl.textContent=d.error||'Fehler'; statusEl.className='save-status err'; }
+  }catch(e){ statusEl.textContent='Verbindungsfehler'; statusEl.className='save-status err'; }
+  setTimeout(()=>{statusEl.textContent='';statusEl.className='save-status';},4000);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+// ── Init ──────────────────────────────────────────────────────────────
+connectWS();
+startPolling();
+loadConfig().then(()=>loadStates());
+</script>
+</body>
+</html>

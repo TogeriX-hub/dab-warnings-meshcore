@@ -1,0 +1,7 @@
+# WarnBridge – Python Dependencies
+# pip install -r requirements.txt
+
+aiohttp>=3.9.0        # Web-Server + HTTP-Client (NINA API)
+pyyaml>=6.0           # config.yaml lesen
+meshcore>=0.1.0       # MeshCore TCP/BLE/Serial Client
+# aiosqlite nicht nötig – wir nutzen sqlite3 synchron (thread-safe genug für unsere Last)

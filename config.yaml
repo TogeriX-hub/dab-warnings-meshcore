@@ -1,0 +1,55 @@
+dab:
+  asa_geocode: ''
+  channel: 9D
+  forward_tests: false
+  welle_cli_url: http://localhost:7979
+dedup:
+  content_hash: true
+  id_cache_ttl_hours: 24
+  max_per_hour: 5
+meshcore:
+  channel_idx: 0
+  host: 192.168.4.1
+  port: 4403
+  scope: '*'
+  simulator: true
+nina:
+  broadcast_districts:
+  - 08115
+  poll_interval_minutes: 15
+  region_state: 08
+  sources:
+    dwd:
+      enabled: true
+      events:
+        gewitter:
+          enabled: true
+          min_level: 2
+        glaette_frost:
+          enabled: false
+          min_level: 3
+        hitze:
+          enabled: false
+          min_level: 2
+        hochwasser:
+          enabled: true
+          min_level: 1
+        nebel:
+          enabled: false
+          min_level: 3
+        schnee_schneesturm:
+          enabled: true
+          min_level: 2
+        starkregen:
+          enabled: true
+          min_level: 2
+        sturm_orkan:
+          enabled: true
+          min_level: 2
+    lhp:
+      enabled: false
+    mowas:
+      enabled: true
+      min_severity: Severe
+warnings_db:
+  ttl_hours: 48
