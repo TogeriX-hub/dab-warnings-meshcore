@@ -138,6 +138,9 @@ class WarnBridge:
         # Täglicher Cleanup
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
 
+        # Mesh Reconnect-Wächter
+        self._tasks.append(asyncio.create_task(self._mesh_reconnect_loop(), name="mesh_reconnect"))
+
         logger.info("WarnBridge läuft. Simulator: %s",
                     self.cfg.get("meshcore", {}).get("simulator", True))
 
@@ -162,6 +165,17 @@ class WarnBridge:
                 self.db.cleanup_expired()
             except Exception as e:
                 logger.error("Cleanup Fehler: %s", e)
+
+    async def _mesh_reconnect_loop(self):
+        """Alle 30s reconnecten wenn Mesh getrennt und nicht im Simulator-Modus."""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                if not self.mesh.simulator and not self.mesh._connected:
+                    logger.info("MeshCore getrennt – versuche Reconnect...")
+                    await self.mesh.connect()
+            except Exception as e:
+                logger.error("Mesh Reconnect Fehler: %s", e)
 
     def status(self) -> dict:
         uptime_seconds = int((datetime.now(timezone.utc) - self.start_time).total_seconds())
