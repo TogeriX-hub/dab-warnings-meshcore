@@ -208,6 +208,7 @@
       <div class="panel-body">
         <div class="stat-row"><span class="stat-label">DAB+</span><span class="stat-value dim" id="st-dab">–</span></div>
         <div class="stat-row"><span class="stat-label">Kanal</span><span class="stat-value" id="st-channel">–</span></div>
+        <div class="stat-row"><span class="stat-label">DAB+ SNR</span><span class="stat-value" id="st-snr">–</span></div>
         <div class="stat-row"><span class="stat-label">NINA API</span><span class="stat-value" id="st-nina">–</span></div>
         <div class="stat-row"><span class="stat-label">Letzter Poll</span><span class="stat-value" id="st-poll">–</span></div>
         <div class="stat-row"><span class="stat-label">MeshCore</span><span class="stat-value" id="st-mesh">–</span></div>
@@ -458,6 +459,9 @@ function applyStatus(s) {
   else if(dab.status==='not_started'){dabEl.textContent='Phase 3';dabEl.className='stat-value dim';}
   else{dabEl.textContent=dab.status||'–';dabEl.className='stat-value warn';}
   setText('st-channel',dab.channel||'–');
+  const snr=dab.snr;
+  if(snr!=null){const snrEl=document.getElementById('st-snr');snrEl.textContent=snr.toFixed(1)+' dB';snrEl.className='stat-value '+(snr>=10?'ok':snr>=5?'warn':'err');}
+  else setText('st-snr','–');
   const ninaEl=document.getElementById('st-nina');
   if(nina.error){ninaEl.textContent='Fehler';ninaEl.className='stat-value err';}
   else if(nina.running){ninaEl.textContent='OK';ninaEl.className='stat-value ok';}

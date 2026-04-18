@@ -19,6 +19,7 @@ from warnings_db import WarningsDB
 from nina_poller import NinaPoller
 from mesh_sender import MeshSender
 from bot_handler import BotHandler
+from dab_listener import DabListener
 import ags_lookup
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class WarnBridge:
 
         self.mesh = MeshSender(config.get("meshcore", {}))
         self.nina = NinaPoller(config.get("nina", {}), on_warning=self.handle_warning)
+        self.dab = DabListener(config.get("dab", {}), on_warning=self.handle_warning)
         self.bot = BotHandler(self)
 
         # web_ui wird in Phase 4 hier eingebunden
@@ -135,6 +137,9 @@ class WarnBridge:
         # NINA Poller starten
         self._tasks.append(asyncio.create_task(self.nina.run(), name="nina_poller"))
 
+        # DAB-Listener starten (Phase 3)
+        self._tasks.append(asyncio.create_task(self.dab.run(), name="dab_listener"))
+
         # Täglicher Cleanup
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
 
@@ -155,6 +160,7 @@ class WarnBridge:
         for task in self._tasks:
             task.cancel()
         self.nina.stop()
+        self.dab.stop()
 
     async def _cleanup_loop(self):
         """Täglich expired entries löschen."""
@@ -186,10 +192,7 @@ class WarnBridge:
             "mesh": self.mesh.status(),
             "dedup": self.dedup.stats(),
             "db": self.db.stats(),
-            "dab": {
-                "status": "not_started",  # Phase 3
-                "channel": self.cfg.get("dab", {}).get("channel", "9D"),
-            },
+            "dab": self.dab.status(),
         }
 
 

@@ -12,12 +12,12 @@ meshcore:
   host: 192.168.4.1
   port: 4403
   scope: '*'
-  simulator: false
+  simulator: true
 nina:
   broadcast_districts:
   - 08115
-  poll_interval_minutes: 15
-  region_state: '02'
+  poll_interval_minutes: 5
+  region_state: 08
   sources:
     dwd:
       enabled: true
