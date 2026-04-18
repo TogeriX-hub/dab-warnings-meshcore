@@ -125,9 +125,19 @@ class WebUI:
         self.app.nina._sources = nina_cfg.get("sources", {})
 
         # MeshSender: simulator + channel_idx + scope aktualisieren
+        was_simulator = self.app.mesh.simulator
         self.app.mesh.simulator = mc_cfg.get("simulator", True)
         self.app.mesh.channel_idx = int(mc_cfg.get("channel_idx", 0))
         self.app.mesh.scope = mc_cfg.get("scope", "*")
+
+        # Simulator wurde deaktiviert → echten Connect versuchen
+        # Simulator wurde aktiviert → als verbunden markieren (kein echter Connect nötig)
+        if was_simulator and not self.app.mesh.simulator:
+            self.app.mesh._connected = False
+            asyncio.create_task(self.app.mesh.connect())
+        elif not was_simulator and self.app.mesh.simulator:
+            self.app.mesh._connected = True
+            self.app.mesh._mc = None
 
         # warnbridge: broadcast_districts aktualisieren
         self.app.cfg = self.config

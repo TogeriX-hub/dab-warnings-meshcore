@@ -329,12 +329,25 @@ def _build_index(raw: list):
 
         else:
             # Gemeinde → Kreis aus ersten 5 Stellen ableiten
-            district_ags = ags12[:5]
             state_ags = ags12[:2]
 
-            if district_ags not in _districts:
-                kreis_name = _LANDKREIS_NAMES.get(district_ags, f"Kreis {district_ags}")
-                _districts[district_ags] = {"name": kreis_name, "state_ags": state_ags}
+            # Stadtstaaten (Hamburg 02, Bremen 04, Berlin 11) haben keine echten
+            # Landkreise. Alle Untereinheiten werden einem einzigen Eintrag zugeordnet
+            # damit nicht ~100 "Kreis 021xx"-Phantomkreise entstehen.
+            _STADTSTAATEN = {"02": "02000", "04": "04000", "11": "11000"}
+            _STADTSTAAT_NAMEN = {"02000": "Hamburg", "04000": "Bremen", "11000": "Berlin"}
+            if state_ags in _STADTSTAATEN:
+                district_ags = _STADTSTAATEN[state_ags]
+                if district_ags not in _districts:
+                    _districts[district_ags] = {
+                        "name": _STADTSTAAT_NAMEN[district_ags],
+                        "state_ags": state_ags,
+                    }
+            else:
+                district_ags = ags12[:5]
+                if district_ags not in _districts:
+                    kreis_name = _LANDKREIS_NAMES.get(district_ags, f"Kreis {district_ags}")
+                    _districts[district_ags] = {"name": kreis_name, "state_ags": state_ags}
 
             norm = _normalize(name)
             record = {
