@@ -170,6 +170,17 @@
   .save-status.ok { color: var(--green); }
   .save-status.err { color: var(--red); }
 
+  /* RxLog */
+  .rxlog-table { width:100%; border-collapse: collapse; font-family: var(--mono); font-size: 10px; }
+  .rxlog-table th { text-align:left; color:var(--muted); padding:4px 8px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:0.08em; font-size:9px; }
+  .rxlog-table td { padding:4px 8px; border-bottom:1px solid var(--border); color:var(--text); vertical-align:top; word-break:break-word; max-width:300px; }
+  .rxlog-table tr:hover td { background:var(--surface); }
+  .rxlog-type-journaline { color:var(--green); }
+  .rxlog-type-tpeg { color:var(--blue); }
+  .rxlog-type-epg { color:var(--muted); }
+  .rxlog-type-unknown { color:var(--muted); }
+  .rxlog-asa-active { color:var(--red); font-weight:600; }
+
   @media (max-width: 700px) {
     .config-sections { grid-template-columns: 1fr; }
     .config-section.full-width { grid-column: 1; }
@@ -177,9 +188,47 @@
     #panel-warnings { grid-column: 1; grid-row: 2; min-height: 300px; }
     #panel-sim { grid-column: 1; grid-row: 3; }
   }
+
+  /* Onboarding */
+  .onboarding-overlay { position:fixed; inset:0; background:var(--bg); z-index:100; display:flex; align-items:center; justify-content:center; }
+  .onboarding-overlay.hidden { display:none; }
+  .onboarding-box { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:32px; max-width:520px; width:90%; }
+  .onboarding-title { font-family:var(--mono); font-size:18px; font-weight:600; color:var(--accent); margin-bottom:6px; }
+  .onboarding-sub { font-size:12px; color:var(--muted); margin-bottom:28px; line-height:1.6; }
+  .onboarding-step { margin-bottom:20px; }
+  .onboarding-label { font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .onboarding-select { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12px; padding:8px 10px; border-radius:3px; outline:none; }
+  .onboarding-select:focus { border-color:var(--accent); }
+  .onboarding-hint { font-size:11px; color:var(--muted); margin-top:6px; line-height:1.5; }
+  .onboarding-btn { width:100%; margin-top:24px; font-family:var(--mono); font-size:11px; font-weight:600; padding:10px; border:1px solid var(--accent); border-radius:3px; cursor:pointer; text-transform:uppercase; letter-spacing:0.08em; background:var(--accent); color:var(--bg); transition:opacity 0.15s; }
+  .onboarding-btn:hover { opacity:0.85; }
+  .onboarding-btn:disabled { opacity:0.3; cursor:not-allowed; }
 </style>
 </head>
 <body>
+
+
+<!-- Onboarding -->
+<div class="onboarding-overlay hidden" id="onboarding">
+  <div class="onboarding-box">
+    <div class="onboarding-title">WarnBridge</div>
+    <div class="onboarding-sub">Willkommen. Bitte wähle dein Bundesland und den Kreis der überwacht werden soll. Du kannst diese Einstellungen jederzeit unter Konfiguration ändern.</div>
+    <div class="onboarding-step">
+      <div class="onboarding-label">Bundesland</div>
+      <select class="onboarding-select" id="ob-state" onchange="onboardingStateChange()">
+        <option value="">Bundesland auswählen...</option>
+      </select>
+    </div>
+    <div class="onboarding-step" id="ob-district-step" style="display:none">
+      <div class="onboarding-label">Broadcast-Kreis (Mesh-Alert)</div>
+      <select class="onboarding-select" id="ob-district">
+        <option value="">Kreis auswählen...</option>
+      </select>
+      <div class="onboarding-hint">Nur für diesen Kreis wird automatisch ein Mesh-Alert gesendet. Alle Kreise des Bundeslands werden trotzdem in der Datenbank gespeichert.</div>
+    </div>
+    <button class="onboarding-btn" id="ob-btn" disabled onclick="onboardingFinish()">Einrichtung abschließen →</button>
+  </div>
+</div>
 
 <header>
   <div class="header-left">
@@ -188,7 +237,12 @@
     <div class="subtitle">DAB+ → MeshCore</div>
     <div id="sim-badge">SIMULATOR</div>
   </div>
-  <div id="conn-dot" title="WebSocket"></div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <button id="broadcast-btn" onclick="toggleBroadcasting()" style="font-family:var(--mono);font-size:10px;font-weight:600;padding:5px 12px;border-radius:3px;cursor:pointer;letter-spacing:0.05em;text-transform:uppercase;transition:all 0.2s;border:1px solid var(--red);color:var(--red);background:transparent" title="Broadcasting ein/aus">
+      ⏸ BROADCASTING AUS
+    </button>
+    <div id="conn-dot" title="WebSocket"></div>
+  </div>
 </header>
 
 <div class="tabs">
@@ -197,6 +251,7 @@
     Konfiguration
     <span class="setup-dot" id="setup-dot"></span>
   </div>
+  <div class="tab" id="tab-rxlog-btn" onclick="switchTab('rxlog')" style="display:none">RxLog</div>
 </div>
 
 <!-- ══ MONITOR ══ -->
@@ -242,6 +297,19 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ══ RXLOG (versteckt, Shift+R) ══ -->
+<div class="tab-content" id="tab-rxlog">
+  <div style="width:100%;overflow-y:auto;padding:16px">
+    <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:12px">
+      <span>DAB+ RxLog – alle empfangenen Pakete (max 50) · <span id="rxlog-count">0</span> Einträge</span>
+      <button class="btn" onclick="loadRxLog()" style="border-color:var(--muted);color:var(--muted);padding:3px 8px">↻ Aktualisieren</button>
+    </div>
+    <div id="rxlog-table-wrap">
+      <div class="empty-state"><div class="icon">📦</div>Keine Pakete empfangen</div>
+    </div>
   </div>
 </div>
 
@@ -398,11 +466,14 @@ const DWD_EVENTS = [
   { key:'gewitter',           label:'Gewitter',         levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'sturm_orkan',        label:'Sturm / Orkan',    levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'starkregen',         label:'Starkregen',       levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'dauerregen',         label:'Dauerregen',       levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'hochwasser',         label:'Hochwasser',       levels:['Stufe 1','Stufe 2','Stufe 3','Stufe 4'] },
   { key:'schnee_schneesturm', label:'Schnee / Sturm',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'glaette_frost',      label:'Glätte / Frost',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'tauwetter',          label:'Tauwetter',        levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'hitze',              label:'Hitze',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
   { key:'nebel',              label:'Nebel',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'uv',                 label:'UV-Index',         levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
 ];
 
 // ── Tabs ──────────────────────────────────────────────────────────────
@@ -435,8 +506,46 @@ function handleWsMessage(msg) {
 
 // ── Polling ───────────────────────────────────────────────────────────
 function startPolling() {
-  loadStatus(); loadWarnings(); loadSent();
-  setInterval(()=>{ loadStatus(); loadWarnings(); loadSent(); }, 10000);
+  checkOnboarding(); loadStatus(); loadWarnings(); loadSent(); loadBroadcastingState();
+  setInterval(()=>{ loadStatus(); loadWarnings(); loadSent(); if(document.getElementById('tab-rxlog').classList.contains('active')) loadRxLog(); }, 10000);
+}
+
+// ── Broadcasting Toggle ───────────────────────────────────────────────
+let broadcastingEnabled = false;
+
+async function loadBroadcastingState() {
+  try {
+    const r = await fetch('/api/broadcasting');
+    if (r.ok) { const d = await r.json(); setBroadcastingUI(d.enabled); }
+  } catch(e) {}
+}
+
+async function toggleBroadcasting() {
+  try {
+    const r = await fetch('/api/broadcasting', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({enabled: !broadcastingEnabled})
+    });
+    if (r.ok) { const d = await r.json(); setBroadcastingUI(d.enabled); }
+  } catch(e) {}
+}
+
+function setBroadcastingUI(enabled) {
+  broadcastingEnabled = enabled;
+  const btn = document.getElementById('broadcast-btn');
+  if (!btn) return;
+  if (enabled) {
+    btn.textContent = '▶ BROADCASTING AN';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+    btn.style.background = 'rgba(76,175,125,0.1)';
+  } else {
+    btn.textContent = '⏸ BROADCASTING AUS';
+    btn.style.borderColor = 'var(--red)';
+    btn.style.color = 'var(--red)';
+    btn.style.background = 'transparent';
+  }
 }
 async function loadStatus() { try { const r=await fetch('/api/status'); if(r.ok) applyStatus(await r.json()); }catch(e){} }
 async function loadWarnings() { try { const r=await fetch('/api/warnings'); if(r.ok) renderWarnings(await r.json()); }catch(e){} }
@@ -496,6 +605,8 @@ function renderWarnings(warnings) {
       </div>
       <div class="warn-body" id="wbody-${i}">
         <div class="warn-field"><div class="warn-field-label">Gebiet</div><div class="warn-field-value">${escHtml(w.area_desc||'–')}</div></div>
+        ${w.ags_codes&&w.ags_codes.length?`<div class="warn-field"><div class="warn-field-label">Betroffene Kreise</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px">${escHtml(w.ags_codes.join(', '))}</div></div>`:''}
+        ${w.dwd_event_type?`<div class="warn-field"><div class="warn-field-label">Ereignis</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px;color:var(--blue)">${escHtml(w.dwd_event_type)} (Level ${w.dwd_level||'–'})</div></div>`:''}
         ${w.description?`<div class="warn-field"><div class="warn-field-label">Beschreibung</div><div class="warn-field-value">${escHtml(w.description)}</div></div>`:''}
         ${w.instruction?`<div class="warn-field"><div class="warn-field-label">Verhaltensempfehlung</div><div class="warn-field-value">${escHtml(w.instruction)}</div></div>`:''}
         <div class="warn-field"><div class="warn-field-label">ID</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${escHtml(w.identifier||'–')}</div></div>
@@ -729,6 +840,46 @@ async function saveConfig() {
   setTimeout(()=>{statusEl.textContent='';statusEl.className='save-status';},4000);
 }
 
+// ── RxLog (versteckt) ─────────────────────────────────────────────────
+async function loadRxLog() {
+  try {
+    const r = await fetch('/api/rxlog');
+    if (!r.ok) return;
+    const entries = await r.json();
+    document.getElementById('rxlog-count').textContent = entries.length;
+    const wrap = document.getElementById('rxlog-table-wrap');
+    if (!entries.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="icon">📦</div>Keine Pakete empfangen</div>';
+      return;
+    }
+    wrap.innerHTML = `<table class="rxlog-table">
+      <thead><tr>
+        <th>Zeit</th><th>Typ</th><th>AppType</th><th>ObjID</th><th>ObjTyp</th><th>ASA</th><th>Titel</th><th>Body</th>
+      </tr></thead>
+      <tbody>${entries.map(e => `<tr>
+        <td>${escHtml(e.time||'')}</td>
+        <td class="rxlog-type-${escHtml(e.service_type||'unknown')}">${escHtml(e.service_type||'?')}</td>
+        <td>${escHtml(e.apptype||'')}</td>
+        <td>${escHtml(String(e.object_id??''))}</td>
+        <td>${escHtml(e.obj_type||'')}</td>
+        <td>${e.asa_active?'<span class="rxlog-asa-active">AKTIV</span>':'<span style="color:var(--muted)">–</span>'}</td>
+        <td>${escHtml(e.title||'')}</td>
+        <td style="color:var(--muted)">${escHtml((e.body||'').substring(0,120))}${(e.body||'').length>120?'…':''}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch(e) {}
+}
+
+// Shift+R → RxLog-Tab einblenden und öffnen
+document.addEventListener('keydown', e => {
+  if (e.shiftKey && e.key === 'R') {
+    const btn = document.getElementById('tab-rxlog-btn');
+    btn.style.display = 'block';
+    switchTab('rxlog');
+    loadRxLog();
+  }
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
@@ -736,6 +887,95 @@ function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').
 connectWS();
 startPolling();
 loadConfig().then(()=>loadStates());
+
+// ── Onboarding ────────────────────────────────────────────────────────
+async function checkOnboarding() {
+  try {
+    const r = await fetch('/api/config');
+    if (!r.ok) return;
+    const cfg = await r.json();
+    const state = cfg?.nina?.region_state;
+    if (!state || state === '') {
+      await initOnboarding();
+      document.getElementById('onboarding').classList.remove('hidden');
+    }
+  } catch(e) {}
+}
+
+async function initOnboarding() {
+  try {
+    const r = await fetch('/api/ags/states');
+    if (!r.ok) return;
+    const states = await r.json();
+    const sel = document.getElementById('ob-state');
+    sel.innerHTML = '<option value="">Bundesland auswählen...</option>';
+    states.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.ags; opt.textContent = s.name;
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+async function onboardingStateChange() {
+  const state = document.getElementById('ob-state').value;
+  const distStep = document.getElementById('ob-district-step');
+  const btn = document.getElementById('ob-btn');
+  btn.disabled = true;
+  if (!state) { distStep.style.display='none'; return; }
+  distStep.style.display='block';
+  try {
+    const r = await fetch(`/api/ags/districts?state=${state}`);
+    if (!r.ok) return;
+    const districts = await r.json();
+    const sel = document.getElementById('ob-district');
+    sel.innerHTML = '<option value="">Kreis auswählen...</option>';
+    districts.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.ags; opt.textContent = d.name;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => { btn.disabled = !sel.value; };
+  } catch(e) {}
+}
+
+async function onboardingFinish() {
+  const state = document.getElementById('ob-state').value;
+  const district = document.getElementById('ob-district').value;
+  if (!state || !district) return;
+
+  const btn = document.getElementById('ob-btn');
+  btn.disabled = true; btn.textContent = 'Wird gespeichert...';
+
+  try {
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    cfg.nina.region_state = state;
+    cfg.nina.broadcast_districts = [district];
+
+    const save = await fetch('/api/config', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(cfg)
+    });
+    if (save.ok) {
+      document.getElementById('onboarding').classList.add('hidden');
+      // selectedDistricts synchronisieren damit saveConfig() korrekt arbeitet
+      selectedDistricts = [district];
+      // Config neu laden damit alle Felder im Konfiguration-Tab stimmen
+      await loadConfig();
+      // Broadcasting bleibt AUS – User muss bewusst aktivieren
+      loadStatus(); loadWarnings();
+    } else {
+      btn.textContent = 'Fehler – nochmal versuchen';
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.textContent = 'Fehler – nochmal versuchen';
+    btn.disabled = false;
+  }
+}
+
 </script>
 </body>
 </html>

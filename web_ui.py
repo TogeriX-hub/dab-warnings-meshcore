@@ -44,6 +44,9 @@ class WebUI:
         aio_app.router.add_get("/api/config", self._api_config_get)
         aio_app.router.add_post("/api/config", self._api_config_post)
         aio_app.router.add_post("/api/simulator/trigger", self._api_sim_trigger)
+        aio_app.router.add_get("/api/broadcasting", self._api_broadcasting_get)
+        aio_app.router.add_post("/api/broadcasting", self._api_broadcasting_post)
+        aio_app.router.add_get("/api/rxlog", self._api_rxlog)
 
         self._runner = web.AppRunner(aio_app)
         await self._runner.setup()
@@ -145,7 +148,9 @@ class WebUI:
         # Sofort einen Poll auslösen damit neue Region direkt abgefragt wird
         asyncio.create_task(self.app.nina._poll())
 
-        logger.info("Konfig live neu geladen – sofortiger Poll gestartet")
+        # Broadcasting bei Config-Änderung zurücksetzen
+        self.app.broadcasting_enabled = False
+        logger.info("Konfig live neu geladen – Broadcasting zurückgesetzt (AUS) – sofortiger Poll gestartet")
 
     async def _api_sim_clear(self, request: web.Request) -> web.Response:
         """Simulator-Log und Test-Warnungen aus DB löschen (nur wenn simulator: true)."""
@@ -178,6 +183,29 @@ class WebUI:
 
         logger.info("Simulator geleert: %d Test-Warnungen gelöscht", deleted)
         return web.json_response({"ok": True, "deleted": deleted})
+
+    async def _api_broadcasting_get(self, request: web.Request) -> web.Response:
+        """Broadcasting-Status abfragen."""
+        return web.json_response({"enabled": self.app.broadcasting_enabled})
+
+    async def _api_broadcasting_post(self, request: web.Request) -> web.Response:
+        """Broadcasting ein- oder ausschalten."""
+        try:
+            data = await request.json()
+            was_enabled = self.app.broadcasting_enabled
+            self.app.broadcasting_enabled = bool(data.get("enabled", False))
+            state = "AN" if self.app.broadcasting_enabled else "AUS"
+            logger.info("Broadcasting: %s", state)
+            # Wenn gerade eingeschaltet: ausstehende Warnungen nachsenden
+            if self.app.broadcasting_enabled and not was_enabled:
+                asyncio.create_task(self.app.on_broadcasting_enabled())
+            return web.json_response({"enabled": self.app.broadcasting_enabled})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+
+    async def _api_rxlog(self, request: web.Request) -> web.Response:
+        """RxLog – alle empfangenen DAB-Pakete (Journaline/TPEG/EPG), neueste zuerst."""
+        return web.json_response(self.app.dab.get_rxlog())
 
     async def _api_sim_trigger(self, request: web.Request) -> web.Response:
         """Testwarnung auslösen (nur wenn simulator: true)."""

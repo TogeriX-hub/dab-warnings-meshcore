@@ -214,6 +214,21 @@ class WarningsDB:
         ).fetchall()
         return [_from_row(r) for r in rows]
 
+    def get_unsent(self, hours: int = 48) -> list[dict]:
+        """
+        Warnungen die gespeichert aber noch nicht als Broadcast gesendet wurden.
+        Für on_broadcasting_enabled() in warnbridge.py.
+        """
+        conn = self._get_conn()
+        cutoff = (_now() - timedelta(hours=hours)).isoformat()
+        rows = conn.execute(
+            """SELECT * FROM warnings
+               WHERE stored_at > ? AND broadcast_sent = 0
+               ORDER BY stored_at ASC""",
+            (cutoff,)
+        ).fetchall()
+        return [_from_row(r) for r in rows]
+
     def cleanup_expired(self):
         """Abgelaufene Einträge löschen. Täglich aufrufen."""
         conn = self._get_conn()

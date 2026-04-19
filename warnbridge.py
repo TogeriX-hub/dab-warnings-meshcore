@@ -43,6 +43,34 @@ def setup_logging(level: str = "INFO"):
     )
 
 
+
+def _dict_to_warning(entry: dict) -> "NormalizedWarning":
+    """Rekonstruiert eine NormalizedWarning aus einem DB-Dict."""
+    from datetime import datetime, timezone
+    def _dt(s):
+        if not s: return None
+        try: return datetime.fromisoformat(s)
+        except: return None
+    return NormalizedWarning(
+        source=entry.get("source", ""),
+        identifier=entry.get("identifier", ""),
+        status=entry.get("status", "actual"),
+        msg_type=entry.get("msg_type", "Alert"),
+        severity=entry.get("severity", "Minor"),
+        urgency=entry.get("urgency", "Expected"),
+        headline=entry.get("headline", ""),
+        description=entry.get("description", ""),
+        instruction=entry.get("instruction", ""),
+        area_desc=entry.get("area_desc", ""),
+        ags_codes=entry.get("ags_codes", []),
+        sent=_dt(entry.get("sent")) or datetime.now(timezone.utc),
+        effective=_dt(entry.get("effective")),
+        expires=_dt(entry.get("expires")),
+        dwd_event_type=entry.get("dwd_event_type"),
+        dwd_level=entry.get("dwd_level"),
+        content_hash=entry.get("content_hash", ""),
+    )
+
 class WarnBridge:
     def __init__(self, config: dict):
         self.cfg = config
@@ -69,6 +97,14 @@ class WarnBridge:
 
         self._tasks: list[asyncio.Task] = []
 
+        # Broadcasting-Schalter: standardmäßig AUS.
+        # Muss im Dashboard manuell aktiviert werden.
+        # Wird bei Config-Reload automatisch zurückgesetzt.
+        self.broadcasting_enabled: bool = False
+        # In-Memory Cache für Broadcast-Dedup (verhindert gleiche Warnung mehrfach senden)
+        # Wird bei Config-Reload geleert damit neue Kreise frisch prüfen können
+        self._broadcast_sent_hashes: set[str] = set()
+
         # welle-cli Watchdog State
         self._welle_last_restart: Optional[datetime] = None
         self._welle_restart_count: int = 0
@@ -93,9 +129,7 @@ class WarnBridge:
             return
 
         # Broadcast-Filter: nur Auto-Alert wenn Kreis in broadcast_districts
-        nina_cfg = self.cfg.get("nina", {})
-        broadcast_districts = nina_cfg.get("broadcast_districts", [])
-        should_broadcast = self._should_broadcast(w, broadcast_districts)
+        should_broadcast = self._should_broadcast(w)
 
         # In DB speichern (immer, für /warnings [Ort] Abfragen)
         db_id = self.db.store(w, broadcast_sent=should_broadcast)
@@ -104,10 +138,29 @@ class WarnBridge:
         self.dedup.mark_seen(w.identifier, w.content_hash)
 
         if should_broadcast:
-            logger.info("🚨 WARNUNG [%s] %s → Mesh", w.source.upper(), w.headline)
-            success = await self.mesh.send_warning(w)
-            if success:
-                self.db.mark_broadcast_sent(db_id)
+            w_send = self._prepare_for_broadcast(w)
+            # Broadcast-Dedup: gleiche Warnung für gleichen Kreis nur 1x senden
+            # Hash aus headline + Minute + area_desc (= konfigurierter Kreis)
+            # Hash auf Stunde (nicht Minute) – alle Gewitter-Warnungen innerhalb
+            # einer Stunde für denselben Broadcast-Kreis = eine Nachricht
+            sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
+            broadcast_hash = f"{w.headline.lower()}|{sent_hour}|{w_send.area_desc}"
+            import hashlib as _hl
+            b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
+            if self.is_broadcast_duplicate(b_hash):
+                logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
+                             w.headline, w_send.area_desc)
+            elif self.dedup.is_rate_limited():
+                logger.warning("Rate-Limit – Warnung nicht gesendet: %s", w.headline)
+            else:
+                self.mark_broadcast_seen(b_hash)
+                logger.info("🚨 WARNUNG [%s] %s → Mesh | Gebiet: %s",
+                            w.source.upper(), w.headline, w_send.area_desc)
+                success = await self.mesh.send_warning(w_send)
+                if success:
+                    self.db.mark_broadcast_sent(db_id)
+                delay = 1 if self.mesh.simulator else 10
+                await asyncio.sleep(delay)  # Rate-Limiting: 1s Simulator, 10s Mesh
         else:
             logger.info("📦 Warnung gespeichert (kein Broadcast) [%s] %s | Gebiet: %s",
                         w.source, w.headline, w.area_desc)
@@ -116,17 +169,145 @@ class WarnBridge:
         if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
             await self.web_ui.broadcast_warning(w, should_broadcast)
 
-    def _should_broadcast(self, w: NormalizedWarning, broadcast_districts: list[str]) -> bool:
-        """Prüft ob die Warnung automatisch ins Mesh gesendet werden soll."""
+    def _should_broadcast(self, w: NormalizedWarning) -> bool:
+        """
+        Prüft ob die Warnung automatisch ins Mesh gesendet werden soll.
+        Broadcasting muss im Dashboard aktiv sein (globaler Schalter).
+        """
+        if not self.broadcasting_enabled:
+            return False
+        return self._passes_broadcast_filters(w)
+
+    def _passes_broadcast_filters(self, w: NormalizedWarning) -> bool:
+        """Kreis- + Quell-Filter ohne Broadcasting-Flag-Check (für Nachsende-Logik)."""
+        nina_cfg = self.cfg.get("nina", {})
+        broadcast_districts = nina_cfg.get("broadcast_districts", [])
+        sources_cfg = nina_cfg.get("sources", {})
+
+        # Kreis-Check
+        if broadcast_districts:
+            if w.ags_codes:
+                # AGS-Codes vorhanden: prüfen ob ein betroffener Kreis in broadcast_districts
+                kreis_ok = any(
+                    ags.startswith(district[:5])
+                    for ags in w.ags_codes
+                    for district in broadcast_districts
+                )
+            else:
+                # Keine AGS-Codes (Dashboard-Format): nicht senden
+                # Lieber eine echte Warnung verpassen als falsch senden
+                kreis_ok = False
+            if not kreis_ok:
+                return False
+
+        # Quell-Filter
+        if w.source == "dwd":
+            return self._passes_dwd_filter(w, sources_cfg.get("dwd", {}))
+        elif w.source == "mowas":
+            return self._passes_mowas_filter(w, sources_cfg.get("mowas", {}))
+        return True
+
+    def _passes_dwd_filter(self, w: NormalizedWarning, src_cfg: dict) -> bool:
+        """DWD: Event-Typ aktiviert + min_level erreicht."""
+        events_cfg = src_cfg.get("events", {})
+        event_type = w.dwd_event_type
+        if not event_type:
+            return False
+        event_cfg = events_cfg.get(event_type, {})
+        if not event_cfg.get("enabled", False):
+            return False
+        return (w.dwd_level or 1) >= event_cfg.get("min_level", 2)
+
+    def _passes_mowas_filter(self, w: NormalizedWarning, src_cfg: dict) -> bool:
+        """MoWaS: min_severity erreicht."""
+        severity_order = ["Minor", "Moderate", "Severe", "Extreme"]
+        min_sev = src_cfg.get("min_severity", "Severe")
+        try:
+            return severity_order.index(w.severity) >= severity_order.index(min_sev)
+        except ValueError:
+            return False
+    def is_broadcast_duplicate(self, b_hash: str) -> bool:
+        """Prüft ob diese Warnung für diesen Kreis bereits gesendet wurde."""
+        return b_hash in self._broadcast_sent_hashes
+
+    def mark_broadcast_seen(self, b_hash: str):
+        """Markiert diese Warnung+Kreis-Kombination als gesendet."""
+        self._broadcast_sent_hashes.add(b_hash)
+
+    def _prepare_for_broadcast(self, w: NormalizedWarning) -> NormalizedWarning:
+        """
+        Bereitet eine Warnung für den Broadcast vor:
+        - area_desc wird durch den konfigurierten Broadcast-Kreis ersetzt
+          (nicht den zufälligen ersten betroffenen Kreis)
+        """
+        import copy
+        import ags_lookup as _ags
+        nina_cfg = self.cfg.get("nina", {})
+        broadcast_districts = nina_cfg.get("broadcast_districts", [])
         if not broadcast_districts:
-            return True
-        if not w.ags_codes:
-            return True
-        return any(
-            ags.startswith(district[:5])
-            for ags in w.ags_codes
-            for district in broadcast_districts
-        )
+            return w
+
+        # Welcher konfigurierte Kreis ist betroffen?
+        matched_district = None
+        for district in broadcast_districts:
+            if w.ags_codes and any(ags.startswith(district[:5]) for ags in w.ags_codes):
+                matched_district = district
+                break
+
+        if not matched_district:
+            return w
+
+        # Kreisnamen aus AGS-Lookup
+        district_name = _ags.district_name(matched_district) or matched_district
+
+        # Kopie mit angepasstem area_desc
+        w2 = copy.copy(w)
+        w2.area_desc = district_name
+        return w2
+
+
+
+    async def on_broadcasting_enabled(self):
+        """
+        Wird aufgerufen wenn Broadcasting eingeschaltet wird.
+        Sendet Warnungen nach die in der DB gespeichert aber noch nicht gesendet
+        wurden und die aktuellen Filter jetzt passieren würden.
+        """
+        logger.info("Broadcasting AN – prüfe DB auf ausstehende Warnungen...")
+        try:
+            pending = self.db.get_unsent(hours=48)
+        except Exception as e:
+            logger.error("DB-Abfrage fehlgeschlagen: %s", e)
+            return
+
+        if not pending:
+            logger.info("Keine ausstehenden Warnungen.")
+            return
+
+        logger.info("%d ausstehende Warnungen – prüfe Filter...", len(pending))
+        sent_count = 0
+
+        for entry in pending:
+            try:
+                w = _dict_to_warning(entry)
+            except Exception as e:
+                logger.debug("Warnung nicht rekonstruierbar: %s", e)
+                continue
+
+            if not self._passes_broadcast_filters(w):
+                continue
+
+            w_send = self._prepare_for_broadcast(w)
+            logger.info("📤 Nachsenden [%s] %s → Gebiet: %s",
+                        w.source.upper(), w.headline, w_send.area_desc)
+            success = await self.mesh.send_warning(w_send)
+            if success:
+                self.db.mark_broadcast_sent(entry["db_id"])
+                sent_count += 1
+                delay = 1 if self.mesh.simulator else 10
+                await asyncio.sleep(delay)  # Rate-Limiting: 1s Simulator, 10s Mesh
+
+        logger.info("Broadcasting-Start: %d Warnungen nachgesendet.", sent_count)
 
     async def start(self):
         logger.info("WarnBridge startet...")

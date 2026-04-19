@@ -1,7 +1,7 @@
 dab:
   asa_geocode: ''
   channel: 9D
-  forward_tests: true
+  forward_tests: false
   welle_cli_url: http://localhost:7979
 dedup:
   content_hash: true
@@ -17,15 +17,18 @@ nina:
   broadcast_districts:
   - 08115
   - 08111
-  poll_interval_minutes: 5
+  poll_interval_minutes: 15
   region_state: 08
   sources:
     dwd:
       enabled: true
       events:
+        dauerregen:
+          enabled: true
+          min_level: 1
         gewitter:
           enabled: true
-          min_level: 2
+          min_level: 1
         glaette_frost:
           enabled: false
           min_level: 3
@@ -33,20 +36,26 @@ nina:
           enabled: false
           min_level: 2
         hochwasser:
-          enabled: false
+          enabled: true
           min_level: 1
         nebel:
           enabled: false
           min_level: 3
         schnee_schneesturm:
           enabled: true
-          min_level: 3
+          min_level: 2
         starkregen:
           enabled: true
-          min_level: 2
+          min_level: 1
         sturm_orkan:
           enabled: true
           min_level: 2
+        tauwetter:
+          enabled: false
+          min_level: 2
+        uv:
+          enabled: false
+          min_level: 3
     lhp:
       enabled: false
     mowas:

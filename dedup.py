@@ -82,16 +82,20 @@ class DedupCache:
                 logger.debug("Dedup: Content-Hash bekannt – %s", content_hash)
                 return True
 
-        # Stufe 3: Stunden-Limit
+        return False
+
+    def is_rate_limited(self) -> bool:
+        """
+        Prüft ob das Stunden-Limit für Mesh-Sends erreicht ist.
+        Wird in warnbridge.py vor dem Senden aufgerufen – NICHT beim DB-Speichern.
+        """
         now = _now()
         hour_ago = now - timedelta(hours=1)
-        # Alte Einträge rauswerfen
         while self._hour_window and self._hour_window[0] < hour_ago:
             self._hour_window.popleft()
         if len(self._hour_window) >= self.max_per_hour:
-            logger.warning("Dedup: Stunden-Limit erreicht (%d/h) – %s", self.max_per_hour, identifier)
+            logger.warning("Rate-Limit erreicht (%d/h)", self.max_per_hour)
             return True
-
         return False
 
     def mark_seen(self, identifier: str, content_hash: str):
