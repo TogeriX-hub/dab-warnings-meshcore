@@ -264,6 +264,8 @@
         <div class="stat-row"><span class="stat-label">DAB+</span><span class="stat-value dim" id="st-dab">–</span></div>
         <div class="stat-row"><span class="stat-label">Kanal</span><span class="stat-value" id="st-channel">–</span></div>
         <div class="stat-row"><span class="stat-label">DAB+ SNR</span><span class="stat-value" id="st-snr">–</span></div>
+        <div class="stat-row"><span class="stat-label">EWS Ensemble</span><span class="stat-value dim" id="st-ews">–</span></div>
+        <div class="stat-row"><span class="stat-label">ASA Status</span><span class="stat-value dim" id="st-asa">–</span></div>
         <div class="stat-row"><span class="stat-label">NINA API</span><span class="stat-value" id="st-nina">–</span></div>
         <div class="stat-row"><span class="stat-label">Letzter Poll</span><span class="stat-value" id="st-poll">–</span></div>
         <div class="stat-row"><span class="stat-label">MeshCore</span><span class="stat-value" id="st-mesh">–</span></div>
@@ -571,6 +573,21 @@ function applyStatus(s) {
   const snr=dab.snr;
   if(snr!=null){const snrEl=document.getElementById('st-snr');snrEl.textContent=snr.toFixed(1)+' dB';snrEl.className='stat-value '+(snr>=10?'ok':snr>=5?'warn':'err');}
   else setText('st-snr','–');
+  // EWS Heartbeat
+  const ewsEl=document.getElementById('st-ews');
+  if(dab.ews_ensemble){ewsEl.textContent='Heartbeat ✓';ewsEl.className='stat-value ok';}
+  else{ewsEl.textContent='Kein Signal';ewsEl.className='stat-value dim';}
+  // ASA Status
+  const asaEl=document.getElementById('st-asa');
+  if(dab.asa_active){
+    const testMark=dab.asa_is_test?' [TEST]':'';
+    const lvl=dab.asa_level?(' L'+dab.asa_level):'';
+    asaEl.textContent='AKTIV'+testMark+lvl;
+    asaEl.className='stat-value '+(dab.asa_is_test?'warn':'err');
+  } else {
+    asaEl.textContent='Kein Alert';
+    asaEl.className='stat-value dim';
+  }
   const ninaEl=document.getElementById('st-nina');
   if(nina.error){ninaEl.textContent='Fehler';ninaEl.className='stat-value err';}
   else if(nina.running){ninaEl.textContent='OK';ninaEl.className='stat-value ok';}

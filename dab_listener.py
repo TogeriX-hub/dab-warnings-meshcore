@@ -1,20 +1,27 @@
 """
-dab_listener.py – WarnBridge Phase 3c
+dab_listener.py – WarnBridge Phase 3c/3d
 Pollt die welle-cli HTTP-API alle 2 Sekunden.
-- /mux.json: ASA-Flag, SNR
+- /mux.json: ASA-Flag, SNR, ews_ensemble
 - /journaline.json: Journaline/TPEG/EPG Pakete
 
 Auswertungslogik:
-  ASA aktiv + service_type=="journaline" → NormalizedWarning mit echtem Text
-  Kein ASA + service_type=="journaline" + Keywords → nur RxLog, kein Mesh
+  ASA aktiv + Journaline-Titel enthält Keyword + Objekt ist neu (nicht in Baseline) → NormalizedWarning
+  Kein ASA → Objekte zur Baseline hinzufügen, kein Mesh
   service_type=="tpeg"/"epg" → nur RxLog
 
-RxLog: alle empfangenen Pakete mit Typ, immer gespeichert (max 50 Einträge).
+Baseline-Mechanismus:
+  Alle Journaline-object_ids die OHNE aktives ASA gesehen werden, landen in _baseline_ids.
+  Bei aktivem ASA werden nur Objekte ausgewertet die NICHT in der Baseline sind.
+  So werden normale DLF-Nachrichten die zufällig parallel laufen herausgefiltert.
+
+Log-Rotation:
+  RxLog wird alle 24h geleert (läuft monatelang durch).
+  Baseline wird alle 24h geleert damit sie sich nicht unbegrenzt füllt.
 """
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Awaitable, Optional
 
 import aiohttp
@@ -29,18 +36,29 @@ POLL_INTERVAL = 2.0
 MAX_ERRORS_BEFORE_WARN = 5
 WATCHDOG_ERROR_THRESHOLD = 10
 RXLOG_MAX = 50
+MAX_JOURNALINE_NEW_PER_ALERT = 10  # Max neue Objekte pro ASA-Session auswerten
+LOG_ROTATION_HOURS = 24            # RxLog + Baseline alle 24h leeren
+
+# Spezifische Keywords – nur im TITEL prüfen, nicht im Body
+# Zusammengesetzte Begriffe um False-Positives zu vermeiden
+DEFAULT_KEYWORDS = [
+    "katastrophenwarnung",
+    "hochwasserwarnung",
+    "evakuierung",
+    "unwetterwarnung",
+    "sturmwarnung",
+    "notfallwarnung",
+    "zivilschutz",
+    "katastrophenschutz",
+    "alarm",           # kurz, aber als Titel-Keyword akzeptabel
+    "notfall",
+]
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(
     total=8,
     connect=3,
     sock_read=5,
 )
-
-# Standard-Keywords für Journaline-Texte ohne aktives ASA-Flag
-DEFAULT_KEYWORDS = [
-    "warnung", "gefahr", "evakuierung", "katastrophe",
-    "hochwasser", "unwetter", "alarm", "notfall",
-]
 
 
 class DabListener:
@@ -49,7 +67,7 @@ class DabListener:
         self.on_warning = on_warning
         self.welle_url = config.get("welle_cli_url", "http://localhost:7979")
         self.forward_tests = config.get("forward_tests", False)
-        self.asa_geocode_filter = config.get("asa_geocode", "")
+        self.asa_geocode_filter = config.get("asa_geocode", "").strip()
         self.keywords = [k.lower() for k in config.get("journaline_keywords", DEFAULT_KEYWORDS)]
 
         self._last_change: int = -1
@@ -60,18 +78,31 @@ class DabListener:
         self._last_poll_ok: bool = False
         self._status: str = "not_started"
 
-        # Journaline-Status (zuletzt empfangener Zustand)
+        # Journaline-Status
         self._journaline_present: bool = False
         self._journaline_service_type: str = ""
 
-        # ASA-Zustand (für Journaline-Auswertung)
+        # ASA-Zustand
         self._asa_active: bool = False
+        self._asa_is_test: bool = False
+        self._asa_level: int = 0
+        self._ews_ensemble: bool = False
 
         # RxLog: alle empfangenen Pakete (max RXLOG_MAX)
         self._rxlog: list[dict] = []
 
+        # Baseline: object_ids die OHNE aktives ASA gesehen wurden
+        # Bei aktivem ASA werden nur Objekte ausgewertet die NICHT hier drin sind
+        self._baseline_ids: set = set()
+
         # Dedup: bereits verarbeitete Journaline-object_ids pro ASA-Session
         self._seen_journaline_ids: set = set()
+
+        # Zähler neue Objekte pro ASA-Session (Limit MAX_JOURNALINE_NEW_PER_ALERT)
+        self._new_objects_this_session: int = 0
+
+        # Log-Rotation: Zeitstempel letzter Rotation
+        self._last_log_rotation: datetime = datetime.now(timezone.utc)
 
         self._watchdog_triggered = False
 
@@ -85,6 +116,7 @@ class DabListener:
             while self._running:
                 try:
                     await self._poll(session)
+                    await self._maybe_rotate_logs()
                 except asyncio.CancelledError:
                     break
                 except asyncio.TimeoutError:
@@ -131,12 +163,23 @@ class DabListener:
     def watchdog_triggered(self) -> bool:
         return self._watchdog_triggered
 
+    async def _maybe_rotate_logs(self):
+        """Alle 24h RxLog und Baseline leeren."""
+        now = datetime.now(timezone.utc)
+        if (now - self._last_log_rotation).total_seconds() >= LOG_ROTATION_HOURS * 3600:
+            old_rxlog = len(self._rxlog)
+            old_baseline = len(self._baseline_ids)
+            self._rxlog.clear()
+            self._baseline_ids.clear()
+            self._last_log_rotation = now
+            logger.info("DAB-Listener Log-Rotation: RxLog (%d Einträge) + Baseline (%d IDs) geleert",
+                        old_rxlog, old_baseline)
+
     async def _poll(self, session: aiohttp.ClientSession):
         """Pollt /mux.json und /journaline.json parallel."""
         mux_url = f"{self.welle_url}/mux.json"
         jl_url = f"{self.welle_url}/journaline.json"
 
-        # Beide Endpunkte parallel abfragen
         mux_task = session.get(mux_url, timeout=REQUEST_TIMEOUT)
         jl_task = session.get(jl_url, timeout=REQUEST_TIMEOUT)
 
@@ -145,14 +188,12 @@ class DabListener:
                 raise ValueError(f"HTTP {mux_resp.status} von welle-cli (/mux.json)")
             mux_data = await mux_resp.json()
 
-            # /journaline.json: 404 ist ok (Endpunkt noch nicht im Build)
             jl_data = None
             if jl_resp.status == 200:
                 jl_data = await jl_resp.json()
             elif jl_resp.status != 404:
                 logger.debug("DAB: /journaline.json HTTP %d", jl_resp.status)
 
-        # Erfolgreicher Poll
         if self._error_count > 0:
             logger.info("DAB-Listener: welle-cli wieder erreichbar nach %d Fehlern",
                         self._error_count)
@@ -160,7 +201,6 @@ class DabListener:
         self._watchdog_triggered = False
         self._last_poll_ok = True
 
-        # SNR
         demod = mux_data.get("demodulator", {})
         self._last_snr = demod.get("snr")
 
@@ -173,11 +213,11 @@ class DabListener:
 
         self._status = "ok"
 
-        # ASA auswerten
         asa = mux_data.get("asa", {})
+        self._ews_ensemble = asa.get("ews_ensemble", False)
+
         await self._process_asa(asa, mux_data)
 
-        # Journaline auswerten
         if jl_data is not None:
             await self._process_journaline(jl_data)
 
@@ -185,15 +225,28 @@ class DabListener:
         """ASA-Block auswerten, NormalizedWarning erzeugen wenn aktiv."""
         active = asa.get("active", False)
         last_change = asa.get("last_change", 0)
+        is_test = asa.get("is_test", False)
 
         self._asa_active = active
+        self._asa_is_test = is_test
+        self._asa_level = asa.get("level", 0)
 
-        # ASA beendet → seen_ids zurücksetzen für nächste Session
+        # Geocode-Filter prüfen
+        if active and self.asa_geocode_filter:
+            # Wir haben noch keinen vollständigen Location-Code-Decoder –
+            # Filter nur wenn has_region=True und wir einen Code haben
+            # Für jetzt: wenn Geocode-Filter gesetzt ist und has_region=False → ignorieren
+            has_region = asa.get("has_region", False)
+            if not has_region:
+                logger.debug("ASA: Geocode-Filter aktiv aber has_region=False – ignoriert")
+
+        # ASA beendet
         if not active and self._active_since:
             duration = (datetime.now(timezone.utc) - self._active_since).seconds
             logger.info("DAB+ ASA beendet (Dauer: %ds)", duration)
             self._active_since = None
             self._seen_journaline_ids.clear()
+            self._new_objects_this_session = 0
 
         # Keine Änderung
         if last_change == self._last_change:
@@ -204,26 +257,20 @@ class DabListener:
 
         # Beim ersten Poll ohne aktiven Alarm: nichts tun
         if prev_change == -1 and not active:
-            logger.debug("DAB-Listener: Initialer Poll, kein aktiver Alarm")
             return
 
         if active:
             self._active_since = datetime.now(timezone.utc)
-            is_test = asa.get("is_test", False)
             status_str = asa.get("status", "actual")
             region_id = asa.get("region_id", 0)
             has_region = asa.get("has_region", False)
             cluster_id = asa.get("cluster_id", 0)
-            emergency = asa.get("emergency_warning", False)
 
             logger.info(
-                "🚨 DAB+ ASA AKTIV | test=%s status=%s region_id=%s has_region=%s cluster=%s emergency=%s",
-                is_test, status_str, region_id, has_region, cluster_id, emergency
+                "🚨 DAB+ ASA AKTIV | test=%s status=%s level=%s region_id=%s has_region=%s cluster=%s",
+                is_test, status_str, self._asa_level, region_id, has_region, cluster_id
             )
 
-            # Nur generische Warnung senden wenn noch keine Journaline-Objekte da sind.
-            # Wenn Journaline vorhanden, übernimmt _process_journaline die NormalizedWarning.
-            # Wir senden hier immer eine initiale Warnung, Journaline-Text ergänzt/ersetzt sie.
             w = self._build_asa_warning(asa, mux, journaline_text=None)
             if w:
                 await self.on_warning(w)
@@ -231,9 +278,9 @@ class DabListener:
     async def _process_journaline(self, jl_data: dict):
         """
         Journaline-Daten auswerten.
-        Alles wird in den RxLog geschrieben.
-        Nur bei service_type=="journaline" + ASA aktiv → NormalizedWarning.
-        Kein ASA + Keywords → nur RxLog.
+        - Alle Objekte → RxLog
+        - Ohne ASA → object_id zur Baseline hinzufügen
+        - Mit ASA → nur neue Objekte (nicht in Baseline) + Keyword im TITEL
         """
         present = jl_data.get("present", False)
         service_type = jl_data.get("service_type", "unknown")
@@ -254,7 +301,7 @@ class DabListener:
             title = obj.get("title", "")
             body = obj.get("body", "")
 
-            # RxLog-Eintrag – immer, mit allen Infos
+            # RxLog – immer
             log_entry = {
                 "timestamp": now.isoformat(),
                 "time": now.strftime("%H:%M:%S"),
@@ -263,7 +310,7 @@ class DabListener:
                 "object_id": object_id,
                 "obj_type": obj_type,
                 "title": title,
-                "body": body[:500] if body else "",  # Max 500 Zeichen im Log
+                "body": body[:500] if body else "",
                 "asa_active": self._asa_active,
             }
             self._rxlog.append(log_entry)
@@ -272,40 +319,52 @@ class DabListener:
 
             # Nur Journaline-Objekte (appType 0x44a) weiterverarbeiten
             if service_type != "journaline":
-                logger.debug("RxLog: %s apptype=%s object_id=%d – nur geloggt",
-                             service_type, log_entry["apptype"], object_id)
                 continue
 
-            # Dedup: bereits verarbeitetes Objekt?
+            if not self._asa_active:
+                # Kein ASA → Objekt zur Baseline hinzufügen (= bekannte Routine-Inhalte)
+                self._baseline_ids.add(object_id)
+                continue
+
+            # ASA aktiv ab hier
+
+            # Limit: max N neue Objekte pro Session
+            if self._new_objects_this_session >= MAX_JOURNALINE_NEW_PER_ALERT:
+                continue
+
+            # Baseline-Check: bekannte Routine-Objekte ignorieren
+            if object_id in self._baseline_ids:
+                logger.debug("Journaline object_id=%d in Baseline – ignoriert", object_id)
+                continue
+
+            # Dedup innerhalb der Session
             if object_id in self._seen_journaline_ids:
                 continue
 
-            text_combined = f"{title} {body}".strip()
+            # Keyword-Check NUR im Titel (nicht im Body)
+            title_lower = title.lower()
+            matched = [kw for kw in self.keywords if kw in title_lower]
 
-            if self._asa_active:
-                # ASA aktiv + Journaline → NormalizedWarning mit echtem Text
+            if not matched:
+                logger.debug("Journaline object_id=%d (neu, kein Keyword im Titel): %s",
+                             object_id, title[:60])
+                # Trotzdem als gesehen markieren damit wir nicht jedes Mal prüfen
                 self._seen_journaline_ids.add(object_id)
-                logger.info("📋 Journaline-Warntext empfangen (ASA aktiv, object_id=%d): %s",
-                            object_id, title[:60])
-                w = self._build_journaline_warning(title, body, object_id)
-                if w:
-                    await self.on_warning(w)
+                continue
 
-            else:
-                # Kein ASA – Keyword-Check
-                text_lower = text_combined.lower()
-                matched = [kw for kw in self.keywords if kw in text_lower]
-                if matched:
-                    logger.warning(
-                        "📋 Journaline ohne ASA – Keywords gefunden %s (object_id=%d): %s",
-                        matched, object_id, title[:60]
-                    )
-                    # Nur loggen, NICHT ins Mesh senden
-                    # Das Log-Entry ist bereits im RxLog oben gespeichert
+            # Neues Objekt mit Keyword im Titel bei aktivem ASA → Warnung
+            self._seen_journaline_ids.add(object_id)
+            self._new_objects_this_session += 1
+
+            logger.info("📋 Journaline-Warntext (ASA aktiv, neu, object_id=%d, keywords=%s): %s",
+                        object_id, matched, title[:60])
+            w = self._build_journaline_warning(title, body, object_id)
+            if w:
+                await self.on_warning(w)
 
     def _build_asa_warning(self, asa: dict, mux: dict,
                             journaline_text: Optional[str]) -> Optional[NormalizedWarning]:
-        """Baut NormalizedWarning aus ASA-Block (ohne oder mit Journaline-Text)."""
+        """Baut NormalizedWarning aus ASA-Block."""
         is_test = asa.get("is_test", False)
         status_str = "test" if is_test else "actual"
 
@@ -314,19 +373,17 @@ class DabListener:
             return None
 
         ensemble = mux.get("ensemble", {})
-        ensemble_label = ensemble.get("label", {}).get("shortlabel", "SWR BW N").strip()
+        ensemble_label = ensemble.get("label", {}).get("shortlabel", "DAB+").strip()
 
         has_region = asa.get("has_region", False)
         region_id = asa.get("region_id", 0)
         cluster_id = asa.get("cluster_id", 0)
-        emergency = asa.get("emergency_warning", False)
 
         if has_region and region_id:
             area_desc = f"Region {region_id} (Cluster {cluster_id})"
         else:
             area_desc = "Baden-Württemberg (bundesweit)"
 
-        severity = "Extreme" if emergency else "Severe"
         prefix = "[TEST] " if is_test else ""
         headline = f"{prefix}DAB+ Katastrophenwarnung – {ensemble_label}"
 
@@ -340,7 +397,6 @@ class DabListener:
             )
 
         instruction = "Offizielle Durchsagen im Radio beachten. Anweisungen der Behörden befolgen."
-
         last_change = asa.get("last_change", 0)
         identifier = f"dab-asa-{'test-' if is_test else ''}{last_change}"
         now = datetime.now(timezone.utc)
@@ -350,7 +406,7 @@ class DabListener:
             identifier=identifier,
             status=status_str,
             msg_type="Alert",
-            severity=severity,
+            severity="Extreme",
             urgency="Immediate",
             headline=headline,
             description=description,
@@ -365,21 +421,23 @@ class DabListener:
     def _build_journaline_warning(self, title: str, body: str,
                                    object_id: int) -> Optional[NormalizedWarning]:
         """Baut NormalizedWarning aus Journaline-Objekt (ASA muss aktiv sein)."""
-        is_test = self.cfg.get("forward_tests", False)  # Wenn Tests weitergeleitet werden
-        # is_test aus ASA-Status ableiten wäre besser – nutze letzten bekannten Zustand
-        # (ASA is_test wird in _process_asa nicht persistent gespeichert – TODO wenn nötig)
+        is_test = self._asa_is_test
+        status_str = "test" if is_test else "actual"
+
+        if is_test and not self.forward_tests:
+            logger.debug("Journaline Test-Warnung übersprungen (forward_tests: false)")
+            return None
 
         now = datetime.now(timezone.utc)
         identifier = f"dab-journaline-{object_id}-{int(now.timestamp())}"
 
-        # Headline aus Journaline-Titel, Beschreibung aus Body
         headline = title if title else "DAB+ Katastrophenwarnung (Journaline)"
         description = body if body else title
 
         return NormalizedWarning(
             source="dab",
             identifier=identifier,
-            status="actual",
+            status=status_str,
             msg_type="Alert",
             severity="Severe",
             urgency="Immediate",
@@ -403,6 +461,9 @@ class DabListener:
             "snr": self._last_snr,
             "poll_ok": self._last_poll_ok,
             "asa_active": self._active_since is not None,
+            "asa_is_test": self._asa_is_test,
+            "asa_level": self._asa_level,
+            "ews_ensemble": self._ews_ensemble,
             "active_since": self._active_since.isoformat() if self._active_since else None,
             "channel": self.cfg.get("channel", "9D"),
             "welle_url": self.welle_url,
@@ -411,4 +472,5 @@ class DabListener:
             "journaline_present": self._journaline_present,
             "journaline_service_type": self._journaline_service_type,
             "rxlog_count": len(self._rxlog),
+            "baseline_count": len(self._baseline_ids),
         }

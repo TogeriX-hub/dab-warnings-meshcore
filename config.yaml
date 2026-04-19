@@ -15,8 +15,7 @@ meshcore:
   simulator: true
 nina:
   broadcast_districts:
-  - 08115
-  - 08111
+  - 08235
   poll_interval_minutes: 15
   region_state: 08
   sources:
