@@ -1,7 +1,7 @@
 dab:
   asa_geocode: ''
   channel: 9D
-  forward_tests: false
+  forward_tests: true
   welle_cli_url: http://localhost:7979
 dedup:
   content_hash: true
