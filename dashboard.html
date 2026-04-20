@@ -390,11 +390,7 @@
             <label>welle-cli URL</label>
             <input type="text" id="cfg-dab-url" placeholder="http://localhost:7979">
           </div>
-          <div class="field">
-            <label>DAB+ Kanal</label>
-            <input type="text" id="cfg-dab-channel" placeholder="9D">
-            <div class="hint">9D = SWR BW Nord, 208.064 MHz</div>
-          </div>
+<input type="hidden" id="cfg-dab-channel">
           <div class="field">
             <label>ASA Geocode (optional)</label>
             <input type="text" id="cfg-dab-geocode" placeholder="z.B. DE-BW oder leer lassen">
@@ -405,6 +401,21 @@
             <div class="toggle-row" style="border:none;padding:4px 0">
               <span style="font-size:11px;color:var(--muted)">[TEST]-Meldungen ins Mesh senden</span>
               <label class="switch"><input type="checkbox" id="cfg-dab-fwdtest"><span class="slider"></span></label>
+            </div>
+            <div class="config-row">
+              <label>welle-cli Binary Pfad (optional)</label>
+              <input type="text" id="cfg-dab-path" placeholder="leer = automatisch suchen">
+              <div class="hint">Leer lassen wenn welle-cli im PATH ist. Beispiel Pi: /usr/local/bin/welle-cli</div>
+            </div>
+            <div class="config-row" style="margin-top:16px">
+              <label>welle-cli Steuerung</label>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select id="welle-channel-select" style="padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></select>
+                <button class="btn btn-sm" onclick="welleSetChannel()">Kanal wechseln</button>
+                <button class="btn btn-sm" onclick="welleStart()">▶ Start</button>
+                <button class="btn btn-sm btn-danger" onclick="welleStop()">■ Stop</button>
+                <span id="welle-status-badge" style="font-size:12px;padding:3px 8px;border-radius:4px;background:var(--surface2);color:var(--muted)">–</span>
+              </div>
             </div>
           </div>
         </div>
@@ -767,7 +778,11 @@ function applyConfigToUI() {
   document.getElementById('cfg-mc-scope').value=mc.scope||'*';
   document.getElementById('cfg-mc-sim').checked=mc.simulator??true;
   document.getElementById('cfg-dab-url').value=dab.welle_cli_url||'http://localhost:7979';
+  if(document.getElementById('cfg-dab-path'))document.getElementById('cfg-dab-path').value=dab.welle_cli_path||'';
   document.getElementById('cfg-dab-channel').value=dab.channel||'9D';
+  // Dropdown synchronisieren
+  const chSel=document.getElementById('welle-channel-select');
+  if(chSel && dab.channel) chSel.value=dab.channel;
   document.getElementById('cfg-dab-geocode').value=dab.asa_geocode||'';
   document.getElementById('cfg-dab-fwdtest').checked=dab.forward_tests??false;
   document.getElementById('cfg-nina-poll').value=nina.poll_interval_minutes||15;
@@ -832,6 +847,7 @@ async function saveConfig() {
       channel:document.getElementById('cfg-dab-channel').value,
       asa_geocode:document.getElementById('cfg-dab-geocode').value,
       forward_tests:document.getElementById('cfg-dab-fwdtest').checked,
+      welle_cli_path:document.getElementById('cfg-dab-path')?document.getElementById('cfg-dab-path').value:'',
     },
     nina:{
       region_state:document.getElementById('cfg-state').value,
@@ -993,6 +1009,76 @@ async function onboardingFinish() {
   }
 }
 
+
+// welle-cli Steuerung
+async function welleLoadStatus() {
+  try {
+    const r = await fetch('/api/welle/status');
+    const d = await r.json();
+    const badge = document.getElementById('welle-status-badge');
+    if (badge) {
+      if (d.running) {
+        badge.textContent = '● läuft (PID ' + d.pid + ') – ' + d.channel;
+        badge.style.color = 'var(--green)';
+      } else {
+        badge.textContent = '● gestoppt';
+        badge.style.color = 'var(--muted)';
+      }
+      if (!d.binary_found) {
+        badge.textContent = '⚠ Binary nicht gefunden';
+        badge.style.color = 'var(--red)';
+      }
+    }
+    // Kanal-Dropdown befüllen
+    const sel = document.getElementById('welle-channel-select');
+    if (sel && d.channels && sel.options.length === 0) {
+      d.channels.forEach(ch => {
+        const opt = document.createElement('option');
+        opt.value = ch;
+        opt.textContent = ch;
+        if (ch === d.channel) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    // Dropdown wird nur beim ersten Laden (sel.options.length === 0) befüllt.
+    // Danach nicht mehr überschreiben – sonst springt der Wert bei jedem Poll zurück.
+  } catch(e) {}
+}
+
+async function welleStart() {
+  const r = await fetch('/api/welle/start', {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) alert('Fehler: ' + d.error);
+  setTimeout(welleLoadStatus, 1000);
+}
+
+async function welleStop() {
+  const r = await fetch('/api/welle/stop', {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) alert('Fehler: ' + d.error);
+  setTimeout(welleLoadStatus, 500);
+}
+
+async function welleSetChannel() {
+  const sel = document.getElementById('welle-channel-select');
+  if (!sel) return;
+  const ch = sel.value;
+  // Verstecktes Feld synchronisieren damit Config-Save den richtigen Kanal speichert
+  const hiddenCh = document.getElementById('cfg-dab-channel');
+  if (hiddenCh) hiddenCh.value = ch;
+  const r = await fetch('/api/welle/channel', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({channel: ch})
+  });
+  const d = await r.json();
+  if (!d.ok) alert('Fehler: ' + d.error);
+  else setTimeout(welleLoadStatus, 1500);
+}
+
+// alle 5s welle-cli Status aktualisieren
+setInterval(welleLoadStatus, 5000);
+welleLoadStatus();
 </script>
 </body>
 </html>
