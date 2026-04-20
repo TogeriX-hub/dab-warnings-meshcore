@@ -139,10 +139,9 @@ Unser Fork: https://github.com/TogeriX-hub/welle.io
 
 - Verbesserung der Zuweisung von Journaline zu ASA-Events
 - Duplikaterkennung von ASA Meldungen (Testwarnungen auf 5C)
-- Streamlinen der Installation (auch Welle.io und dependencies)
 - Welle.io Prozesse verschlanken (für Dauerbetrieb)
 - Duplikaterekennung von ASA + gleichzeitig Nina
-- 
+- ASA-Warnungen [Test] werden nicht ins Mesh gesendet
 =======
 | Komponente | Status |
 |---|---|
@@ -154,4 +153,3 @@ Unser Fork: https://github.com/TogeriX-hub/welle.io
 | Web-Dashboard | ✅ OK |
 | Raspberry Pi Setup | 🔜 Ausstehend |
 | Warntag-Livetest | 🗓 10.09.2026 |
->>>>>>> Stashed changes
