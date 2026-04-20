@@ -12,6 +12,7 @@
 #include "dab-packet.h"
 #include "eep-protection.h"
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <sys/time.h>
 
@@ -320,6 +321,12 @@ void DabPacket::dispatchDataGroup(const std::vector<uint8_t>& bits)
         for (int j = 0; j < 8; j++) b = (b << 1) | (bits[i * 8 + j] & 1);
         bytes[i] = b;
     }
+
+    // DEBUG: erste 8 Bytes loggen
+    std::clog << "DabPacket: dispatchDataGroup " << num_bytes << "B: ";
+    for (size_t i = 0; i < std::min(num_bytes, (size_t)8); i++)
+        std::clog << std::hex << std::setw(2) << std::setfill('0') << (int)bytes[i] << " ";
+    std::clog << std::dec << "\n";
 
     // Feed into Fraunhofer DAB datagroup decoder.
     // It checks CRC, validates header, and calls our callback if valid.
