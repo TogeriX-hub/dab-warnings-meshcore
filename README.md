@@ -125,6 +125,15 @@ python3 warnbridge.py
 - DAB+ Empfang: OK  
 - ASA-Erkennung: OK  
 - NINA Integration: OK  
-- MeshCore Integration: OK  
+- MeshCore Integration: in Entwicklung 
 - Web-Dashboard: OK  
-- Journaline: in Entwicklung  
+- Journaline: in Entwicklung
+
+## To-Do:
+
+- Verbesserung der Zuweisung von Journaline zu ASA-Events
+- Duplikaterkennung von ASA Meldungen (Testwarnungen auf 5C)
+- Streamlinen der Installation (auch Welle.io und dependencies)
+- Welle.io Prozesse verschlanken (für Dauerbetrieb)
+- Duplikaterekennung von ASA + gleichzeitig Nina
+- 
