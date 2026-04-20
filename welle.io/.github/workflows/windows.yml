@@ -1,0 +1,149 @@
+name: Windows build
+
+on:
+  push:
+    branches:
+      - master
+      - next
+      - 'next*'
+
+jobs:
+  qtbuild:
+    name: Build with Qt
+    runs-on: windows-latest
+
+    steps:
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.1'
+          modules: 'qtcharts qtmultimedia qt5compat qtshadertools'
+          arch: 'win64_mingw'
+          tools: 'tools_mingw1310'
+          aqtversion: '==3.1.19' # See https://github.com/jurplel/install-qt-action/issues/270
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - run: git fetch --prune --unshallow --tags
+        
+      - name: Preapre build
+        run: |            
+            echo "Create a build directory"
+            md build
+            cd build
+            md release
+            
+            echo "Get all headers and DLLs for the build"
+            cd ../..
+            git clone https://github.com/AlbrechtL/welle.io-win-libs.git
+
+      - name: Display environment variables
+        run: | 
+          Get-ChildItem Env:
+     
+      - name: Build
+        id: build
+        run: |
+            cd build/release
+            qmake ../..
+            mingw32-make -j4
+
+      - name: Create installer
+        id: create_installer
+        run: |
+            echo "*** Create new folders ***"
+            New-Item -ItemType directory -Path installer
+            New-Item -ItemType directory -Path to_publish
+            New-Item -ItemType directory -Path publish
+            New-Item -ItemType directory -Path publish_production
+            
+            echo "*** Copy non QT DLLs from welle.io-win-libs repository ***"
+            Copy-Item ..\welle.io-win-libs\x64\*.dll installer -recurse # Libs
+            Copy-Item ..\welle.io-win-libs\x64\*.exe installer -recurse # Microsoft Visual C++ Redistributable 
+            Copy-Item ..\welle.io-win-libs\zadig*.exe installer
+            
+            echo "*** Copy welle-io binary files ***"
+            Copy-Item build\release\src\welle-gui\release\welle-io.exe installer
+            
+            # Deploy QT and related plugins
+            echo "*** Deploy QT and related plugins ***"
+            & windeployqt installer\welle-io.exe --qmldir src\welle-gui\QML\ --no-translations
+
+            # For some reason windeployqt deploys the wrong DLLs
+            Copy-Item $Env:QT_ROOT_DIR\bin\libgcc_s_seh-1.dll installer
+            Copy-Item $Env:QT_ROOT_DIR\bin\libwinpthread-1.dll installer
+            Copy-Item $Env:QT_ROOT_DIR\bin\libstdc++-6.dll installer
+
+            echo ""*** Create filename "***"
+            $current_date=$(Get-Date -Format 'yyyyMMdd')
+            $git_hash=$(git -C . rev-parse --short HEAD)
+            $Filename = $current_date + "_" + $git_hash + "_Windows_welle-io-setup_x64"
+
+            echo ""*** Run InnoSetup "***"
+            & ISCC /Oto_publish\ /F$Filename /DGitHash=$git_hash windows_installer.iss
+
+      - name: Archive artifacts (welle.io Windows installer)
+        id: upload_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: welle.io Windows installer
+          path: to_publish\*.exe
+          if-no-files-found: error
+
+      - name: Sign installer with self-signed certificate with SignPath
+        id: signing_installer
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: 'b7a507e8-ab76-445f-bfb5-05944bcbbee9'
+          project-slug: 'welle.io'
+          signing-policy-slug: 'test-signing'
+          github-artifact-id: '${{steps.upload_artifact.outputs.artifact-id}}'
+          wait-for-completion: true
+          output-artifact-directory: 'publish'
+
+      - name: Archive artifacts (welle.io Windows installer signed)
+        id: upload_artifact_self_signed
+        uses: actions/upload-artifact@v4
+        with:
+          name: welle.io Windows installer self-signed
+          path: publish\*.exe
+          if-no-files-found: error
+
+      - name: Upload to nightly server
+        uses: dennisameling/ftp-upload-action@v1
+        with:
+          server: a2f24.netcup.net # welle-io-nightlies.albrechtloh.de is redirected to here
+          secure: true
+          username: ${{ secrets.SFTP_USER }}
+          password: ${{ secrets.SFTP_PASSWORD }}
+          local_dir: publish/
+
+      - name: Production sign installer with SignPath
+        id: production_signing_installer
+        uses: signpath/github-action-submit-signing-request@v1
+
+        # Production signing needs a manual step in SignPath within 5 minutes.
+        # During development we don't need each build signed with a production key.
+        # So we can accept to fail here
+        continue-on-error: true
+
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          organization-id: 'b7a507e8-ab76-445f-bfb5-05944bcbbee9'
+          project-slug: 'welle.io'
+          signing-policy-slug: 'release-signing'
+          github-artifact-id: '${{steps.upload_artifact.outputs.artifact-id}}'
+          wait-for-completion: true
+          output-artifact-directory: 'publish_production'
+
+      - name: Archive artifacts (welle.io Windows installer signed)
+        id: upload_artifact_production_signed
+        uses: actions/upload-artifact@v4
+        if: always() && steps.production_signing_installer.outcome == 'success'
+        with:
+          name: welle.io Windows installer production-signed
+          path: publish_production\*.exe
+          if-no-files-found: error
+
+

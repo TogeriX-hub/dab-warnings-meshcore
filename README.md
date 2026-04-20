@@ -4,7 +4,7 @@ DAB+ Notfallwarnungen offline empfangen und ins MeshCore-LoRa-Netz einspeisen.
 
 WarnBridge ist ein Python-basiertes System, das offizielle Katastrophenwarnungen aus zwei Quellen verarbeitet:
 
-- **DAB+ (ASA/EWF)** – vollständig offline, primärer Kanal  
+- **DAB+ (ASA/EWF/Journaline)** – vollständig offline, primärer Kanal  
 - **NINA API (BBK)** – sekundärer Online-Kanal  
 
 Die Warnungen werden vereinheitlicht, dedupliziert und anschließend als kompakte Nachrichten in ein MeshCore LoRa Mesh-Netzwerk übertragen.
@@ -24,8 +24,8 @@ WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingu
 
 - Empfang von DAB+ Multiplexen über RTL-SDR  
 - Auswertung von ASA (Alarm Signalisation)  
-- (Geplant) Journaline-Dekodierung für Warntexte  
-- NINA API Integration (MoWaS)  
+- Journaline-Dekodierung für Warntexte (Fraunhofer NML Decoder)  
+- NINA API Integration (MoWaS + DWD)  
 - CAP-Normalisierung (einheitliche Datenstruktur)  
 - Deduplizierung (ID + Inhalts-Hash)  
 - Speicherung in SQLite (48h)  
@@ -36,6 +36,7 @@ WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingu
 - `/details`  
 - `/warnings <Ort>`  
 - `/status`  
+- `/help`
 
 - Web-Dashboard mit Simulator (für Entwicklung & Konfiguration)
 
@@ -52,69 +53,73 @@ WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingu
 
 ### Software
 
+- macOS mit Homebrew **oder** Raspberry Pi OS  
 - Python 3.9+  
-- welle-cli (angepasste Version, siehe unten)  
+- welle-cli (angepasste Version, bereits im Repo enthalten)
 
 ---
 
-## Wichtiger Hinweis zu welle.io
+## Installation (macOS)
 
-Dieses Projekt nutzt eine angepasste Version von welle.io:
+### 1. Homebrew installieren (falls noch nicht vorhanden)
 
-https://github.com/TogeriX-hub/welle.io  
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
-Bitte diesen Fork verwenden und selbst kompilieren.
-
----
-
-## Installation
-
-### 1. Repository klonen
+### 2. Repository klonen
 
 ```bash
 git clone https://github.com/TogeriX-hub/dab-warnings-meshcore
 cd dab-warnings-meshcore
 ```
 
-### 2. Python-Abhängigkeiten installieren
+### 3. Installation mit einem Befehl
 
 ```bash
-pip install -r requirements.txt
+chmod +x install.sh
+./install.sh
 ```
 
-### 3. welle-cli installieren
+Das Skript installiert automatisch alle Abhängigkeiten, kompiliert welle-cli und richtet die Python-Umgebung ein.
+
+---
+
+## Starten
+
+### welle-cli starten (Terminal 1)
 
 ```bash
-git clone https://github.com/TogeriX-hub/welle.io
-cd welle.io
-mkdir build && cd build
-
-cmake .. \
-  -DRTLSDR=1 \
-  -DBUILD_WELLE_IO=OFF \
-  -DBUILD_WELLE_CLI=ON \
-  -DKISS_FFT=ON
-
-make -j4
-```
-
-### 4. welle-cli starten
-
-```bash
+cd welle.io/build
 ./welle-cli -c 9D -C 1 -w 7979
 ```
 
-### 5. WarnBridge starten
+### WarnBridge starten (Terminal 2)
 
 ```bash
+cd dab-warnings-meshcore
 python3 warnbridge.py
 ```
 
 ---
 
+## Wichtiger Hinweis zu welle.io
+
+Dieses Projekt enthält eine angepasste Version von welle.io direkt im Repository (`welle.io/`). Der Fork enthält folgende Erweiterungen gegenüber dem Original:
+
+- ASA-Erkennung über FIG 0/15 und FIG 0/19  
+- Packet-Mode Subchannel Decoder  
+- Fraunhofer NML Journaline Decoder (zlib-komprimierte JML-Objekte)  
+- `/journaline.json` und `/rxlog.json` HTTP-Endpunkte  
+
+Original: https://github.com/AlbrechtL/welle.io  
+Unser Fork: https://github.com/TogeriX-hub/welle.io  
+
+---
+
 ## Entwicklung (Mac-first)
 
-- MeshCore Simulator aktiv über `config.yaml`  
+- MeshCore Simulator aktiv über `config.yaml` (`meshcore.simulator: true`)
 - Dashboard unter: http://localhost:8080  
 - Keine Hardware für Entwicklung nötig  
 
@@ -122,9 +127,30 @@ python3 warnbridge.py
 
 ## Projektstatus
 
+<<<<<<< Updated upstream
 - DAB+ Empfang: OK  
 - ASA-Erkennung: OK  
 - NINA Integration: OK  
-- MeshCore Integration: OK  
+- MeshCore Integration: in Entwicklung 
 - Web-Dashboard: OK  
-- Journaline: in Entwicklung  
+- Journaline: in Entwicklung
+
+## To-Do:
+
+- Verbesserung der Zuweisung von Journaline zu ASA-Events
+- Duplikaterkennung von ASA Meldungen (Testwarnungen auf 5C)
+- Welle.io Prozesse verschlanken (für Dauerbetrieb)
+- Duplikaterekennung von ASA + gleichzeitig Nina
+- ASA-Warnungen [Test] werden nicht ins Mesh gesendet
+- ASA Geocode funktioniert noch nicht (wichtig für Betrieb von 5C wegen Dauertests)
+=======
+| Komponente | Status |
+|---|---|
+| DAB+ Empfang | ✅ OK |
+| ASA-Erkennung | ✅ OK |
+| Journaline-Decoder | ✅ OK (getestet auf DLF 5C) |
+| NINA Integration (MoWaS + DWD) | ✅ OK |
+| MeshCore Integration | ✅ OK |
+| Web-Dashboard | ✅ OK |
+| Raspberry Pi Setup | 🔜 Ausstehend |
+| Warntag-Livetest | 🗓 10.09.2026 |

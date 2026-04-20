@@ -7,6 +7,8 @@ REST-API + WebSocket für Live-Updates und Simulator.
 import asyncio
 import json
 import logging
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -47,6 +49,10 @@ class WebUI:
         aio_app.router.add_get("/api/broadcasting", self._api_broadcasting_get)
         aio_app.router.add_post("/api/broadcasting", self._api_broadcasting_post)
         aio_app.router.add_get("/api/rxlog", self._api_rxlog)
+        aio_app.router.add_get("/api/welle/status", self._api_welle_status)
+        aio_app.router.add_post("/api/welle/start", self._api_welle_start)
+        aio_app.router.add_post("/api/welle/stop", self._api_welle_stop)
+        aio_app.router.add_post("/api/welle/channel", self._api_welle_channel)
 
         self._runner = web.AppRunner(aio_app)
         await self._runner.setup()
@@ -252,6 +258,158 @@ class WebUI:
 
         if self.config.get("dab"):
             self.config["dab"]["forward_tests"] = original
+
+    # ------------------------------------------------------------------
+    # welle-cli Steuerung
+    # ------------------------------------------------------------------
+
+    # Vollständige Band III Kanalliste (5A–13F)
+    DAB_CHANNELS = [
+        "5A","5B","5C","5D",
+        "6A","6B","6C","6D",
+        "7A","7B","7C","7D",
+        "8A","8B","8C","8D",
+        "9A","9B","9C","9D",
+        "10A","10B","10C","10D","10N",
+        "11A","11B","11C","11D","11N",
+        "12A","12B","12C","12D","12N",
+        "13A","13B","13C","13D","13E","13F",
+    ]
+
+    def _find_welle_cli(self) -> Optional[str]:
+        """welle-cli Binary finden: config → PATH → bekannte Pfade."""
+        # 1. Aus config.yaml
+        configured = self.config.get("dab", {}).get("welle_cli_path", "").strip()
+        if configured and Path(configured).is_file():
+            return configured
+
+        # 2. Im PATH
+        found = shutil.which("welle-cli")
+        if found:
+            return found
+
+        # 3. Bekannte Build-Pfade
+        known = [
+            Path.home() / "DAB Warnings" / "welle.io" / "build" / "welle-cli",
+            Path("/usr/local/bin/welle-cli"),
+            Path("/usr/bin/welle-cli"),
+            Path("/opt/welle-cli/welle-cli"),
+        ]
+        for p in known:
+            if p.is_file():
+                return str(p)
+
+        return None
+
+    def _welle_process(self) -> Optional[subprocess.Popen]:
+        """Gibt den laufenden welle-cli Prozess zurück (falls vorhanden)."""
+        return getattr(self, "_welle_proc", None)
+
+    def _welle_is_running(self) -> bool:
+        proc = self._welle_process()
+        return proc is not None and proc.poll() is None
+
+    async def _api_welle_status(self, request: web.Request) -> web.Response:
+        """welle-cli Status abfragen."""
+        binary = self._find_welle_cli()
+        proc = self._welle_process()
+        channel = self.config.get("dab", {}).get("channel", "9D")
+        return web.json_response({
+            "running": self._welle_is_running(),
+            "pid": proc.pid if self._welle_is_running() else None,
+            "channel": channel,
+            "binary": binary,
+            "binary_found": binary is not None,
+            "channels": self.DAB_CHANNELS,
+        })
+
+    async def _api_welle_start(self, request: web.Request) -> web.Response:
+        """welle-cli starten."""
+        if self._welle_is_running():
+            return web.json_response({"ok": False, "error": "welle-cli läuft bereits"})
+
+        binary = self._find_welle_cli()
+        if not binary:
+            return web.json_response({"ok": False, "error": "welle-cli Binary nicht gefunden. Pfad in config.yaml unter dab.welle_cli_path eintragen."}, status=400)
+
+        channel = self.config.get("dab", {}).get("channel", "9D")
+        cmd = [binary, "-c", channel, "-C", "1", "-w", "7979"]
+
+        try:
+            self._welle_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("welle-cli gestartet: %s (PID %d)", " ".join(cmd), self._welle_proc.pid)
+            return web.json_response({"ok": True, "pid": self._welle_proc.pid, "channel": channel})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def _api_welle_stop(self, request: web.Request) -> web.Response:
+        """welle-cli beenden."""
+        proc = self._welle_process()
+        if not proc or not self._welle_is_running():
+            return web.json_response({"ok": False, "error": "welle-cli läuft nicht"})
+
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            self._welle_proc = None
+            logger.info("welle-cli beendet")
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+    async def _api_welle_channel(self, request: web.Request) -> web.Response:
+        """Kanal wechseln: welle-cli beenden und mit neuem Kanal neu starten."""
+        try:
+            data = await request.json()
+            channel = data.get("channel", "").upper().strip()
+        except Exception:
+            return web.json_response({"ok": False, "error": "Ungültiges JSON"}, status=400)
+
+        if channel not in self.DAB_CHANNELS:
+            return web.json_response({"ok": False, "error": f"Unbekannter Kanal: {channel}"}, status=400)
+
+        binary = self._find_welle_cli()
+        if not binary:
+            return web.json_response({"ok": False, "error": "welle-cli Binary nicht gefunden"}, status=400)
+
+        # Aktuellen Prozess beenden
+        proc = self._welle_process()
+        if proc and self._welle_is_running():
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            self._welle_proc = None
+
+        # Kanal in config speichern
+        if "dab" not in self.config:
+            self.config["dab"] = {}
+        self.config["dab"]["channel"] = channel
+        import yaml
+        with open("config.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(self.config, f, allow_unicode=True, default_flow_style=False)
+
+        # Neu starten
+        await asyncio.sleep(0.5)
+        cmd = [binary, "-c", channel, "-C", "1", "-w", "7979"]
+        try:
+            self._welle_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("welle-cli Kanal gewechselt zu %s (PID %d)", channel, self._welle_proc.pid)
+            return web.json_response({"ok": True, "channel": channel, "pid": self._welle_proc.pid})
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=500)
 
     # ------------------------------------------------------------------
     # WebSocket

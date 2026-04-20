@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=welle.io
+Exec=welle-io
+Icon=io.welle.welle-gui
+Comment=A DAB/DAB+ Software Radio
+Categories=AudioVideo;
