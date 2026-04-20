@@ -2,7 +2,7 @@ dab:
   asa_geocode: 1257-1533-2371
   channel: 5C
   forward_tests: true
-  welle_cli_path: /Users/tobias/Desktop/WB/dab-warnings-meshcore/welle.io/build/welle-cli
+  welle_cli_path: ./welle.io/build/welle-cli
   welle_cli_url: http://localhost:7979
 dedup:
   content_hash: true
