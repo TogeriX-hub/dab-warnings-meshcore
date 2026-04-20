@@ -142,6 +142,7 @@ Unser Fork: https://github.com/TogeriX-hub/welle.io
 - Welle.io Prozesse verschlanken (für Dauerbetrieb)
 - Duplikaterekennung von ASA + gleichzeitig Nina
 - ASA-Warnungen [Test] werden nicht ins Mesh gesendet
+- ASA Geocode funktioniert noch nicht (wichtig für Betrieb von 5C wegen Dauertests)
 =======
 | Komponente | Status |
 |---|---|
