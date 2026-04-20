@@ -11,7 +11,7 @@ fi
 
 # 2. Abhängigkeiten
 echo "→ Installiere Abhängigkeiten..."
-brew install cmake libusb zlib lame mpg123 librtlsdr faad2 git python3
+brew install cmake libusb zlib lame mpg123 librtlsdr faad2
 
 # 3. welle-cli bauen
 echo "→ Baue welle-cli..."
@@ -44,7 +44,5 @@ echo "✓ Installation abgeschlossen."
 echo ""
 echo "Nächste Schritte:"
 echo "  1. RTL-SDR Dongle einstecken"
-echo "  2. welle-cli starten:"
-echo "     cd welle.io/build && ./welle-cli -c 9D -C 1 -w 7979"
-echo "  3. WarnBridge starten (neues Terminal-Fenster):"
+echo "  2. WarnBridge starten (neues Terminal-Fenster):"
 echo "     python3 warnbridge.py"

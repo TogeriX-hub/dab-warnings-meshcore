@@ -138,7 +138,7 @@ struct AsaJson {
     uint8_t cluster_id = 0;
     std::time_t last_change = 0;
     bool has_region = false;
-    uint8_t region_id = 0;
+    uint16_t region_id = 0;
     std::string status;        // "actual" oder "test"
 };
 

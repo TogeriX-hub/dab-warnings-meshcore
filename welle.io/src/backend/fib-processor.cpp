@@ -683,11 +683,19 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
         (void)sid_lo;
     }
 
-    // Location Codes – für WarnBridge nur loggen, kein Geo-Matching
+    // Location Codes parsen (ETSI TS 104 089, je 16 Bit pro Code)
+    // Bits 15–4: 12-Bit Location Code, Bits 3–0: reserviert
     int loc_bytes = length - (offset / 8);
-    if (loc_bytes > 0) {
-        std::clog << "fib-processor: FIG 0/15 location codes: "
-                  << loc_bytes << " bytes\n";
+    asaHasRegion = (loc_bytes >= 2);
+
+    if (loc_bytes >= 2) {
+        // Ersten Location Code auslesen (12 Bit, MSB-first)
+        uint16_t loc_code = getBits(d, offset, 12);  // 12-Bit Location Code
+        asaRegionId = loc_code;  // als uint16_t speichern!
+
+        std::clog << "fib-processor: FIG 0/15 location_code=0x"
+                  << std::hex << loc_code << std::dec
+                  << " (" << loc_bytes/2 << " codes total)\n";
     }
 
     // State aktualisieren

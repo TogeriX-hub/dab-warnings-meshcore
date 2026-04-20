@@ -65,7 +65,7 @@ class FIBProcessor {
             uint8_t cluster_id = 0;    // Legacy (FIG 0/19)
             std::time_t last_change = 0;
             bool has_region = false;
-            uint8_t region_id = 0;     // 0 = no region restriction
+            uint16_t region_id = 0;     // 0 = no region restriction
             std::string status;        // "actual" oder "test"
         };
         AsaState getAsaState() const;
@@ -160,7 +160,7 @@ class FIBProcessor {
         uint8_t asaClusterId = 0;
         std::time_t asaLastChange = 0;
         bool asaHasRegion = false;
-        uint8_t asaRegionId = 0;
+        uint16_t asaRegionId = 0;
 
         // Journaline state, updated by FIG 0/13
         bool     journalinePresent = false;
