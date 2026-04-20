@@ -1,8 +1,8 @@
 dab:
   asa_geocode: 1257-1533-2371
-  channel: 5C
+  channel: 11B
   forward_tests: true
-  welle_cli_path: /Users/tobiasgurtler/DAB Warnings/welle.io/build/welle-cli
+  welle_cli_path: /Users/tobias/Desktop/WB/dab-warnings-meshcore/welle.io/build/welle-cli
   welle_cli_url: http://localhost:7979
 dedup:
   content_hash: true
@@ -16,7 +16,7 @@ meshcore:
   simulator: true
 nina:
   broadcast_districts:
-  - 08115
+  - 08111
   poll_interval_minutes: 15
   region_state: 08
   sources:
