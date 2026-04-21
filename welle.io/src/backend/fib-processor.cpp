@@ -642,13 +642,17 @@ void FIBProcessor::FIG0Extension14 (uint8_t *d)
 }
 
 // FIG 0/15 – Emergency Warning System (ASA / Automatic Safety Alert)
-// ETSI TS 104 089 V1.1.1 (2024-09), Annex E
+// ETSI TS 104 089 V1.1.1 (2024-09), Annex E + F
 //
 // Formen:
 //   Heartbeat:  leerer Payload → kein Alarm, aber Ensemble ist EWS-fähig
 //   Trigger:    Id-Feld + Status-Feld + Location Codes → Alarm aktiv
 //   Sustain:    Id-Feld → Alarm läuft noch
 //   End:        Id-Feld, C/N=1 → Alarm beendet
+//
+// Location Code Struktur (Annex E):
+//   NFF(2) + Zone(6) + SCF(1) + NumDigits(3) + Digit1(4) + OtherDigits(NumDigits*4)
+//   + Padding(0 or 4) + SubCodes(0 or 16)
 //
 // Holdover: asaActive bleibt mindestens ASA_HOLDOVER_SECONDS nach dem
 // letzten active=1 auf true, damit der Python-Poller den Alert sicher sieht.
@@ -660,12 +664,11 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
     int16_t offset = 16;               // Bit-Offset nach dem 2-Byte FIG-0-Header
 
     // KEIN lock_guard hier – processFIB haelt den Mutex bereits.
-    // Zweiter lock_guard auf nicht-rekursivem Mutex = Deadlock.
 
-    // Heartbeat: kein Payload nach dem Header → Ensemble nimmt an EWS teil
+    // Heartbeat: kein Payload → Ensemble nimmt an EWS teil
     if (offset / 8 >= length) {
         asaEwsEnsemble = true;
-        // Beim Heartbeat: Holdover prüfen – active erst auf false wenn Fenster abgelaufen
+        // Holdover: active erst auf false wenn Fenster abgelaufen
         if (asaActive) {
             auto elapsed = std::chrono::system_clock::now() - asaLastAlertSeen;
             if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()
@@ -676,40 +679,98 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
         return;
     }
 
-    // Id-Feld parsen (8 Bit)
-    uint8_t iid     = getBits_4(d, offset);      // Incident Identifier (0x0–0xE)
-    uint8_t last    = getBits_1(d, offset + 4);  // 1 = letztes FIG 0/15 im Alert Set
-    uint8_t level   = getBits_2(d, offset + 5);  // Alert Level (1 oder 2)
-    uint8_t is_test = getBits_1(d, offset + 7);  // 1 = Testwarnung, 0 = Echtfall
+    // Id-Feld parsen (8 Bit für tuned ensemble, OE=0)
+    // Phase(2) + SubChId(6)
+    uint8_t phase   = getBits_2(d, offset);      // 00=Pre-trigger, 01=Trigger, 10=Sustain, 11=End
+    // SubChId ignorieren (für Journaline nicht relevant)
     offset += 8;
-    (void)last;
 
-    // Status-Feld vorhanden? (Trigger/Pre-Trigger haben es, Sustain/End nicht)
-    bool alert_active = false;
-    if (offset / 8 < length) {
-        uint8_t sid_lo  = getBits_5(d, offset);      // Service ID lower (5 Bit)
-        alert_active    = getBits_1(d, offset + 5);  // Alert-Flag
-        // uint8_t nff  = getBits_1(d, offset + 6);  // No Further FIG (ignoriert)
+    // Pre-trigger hat zusätzlich Rfa(2)+Sec(6)
+    if (phase == 0) {
         offset += 8;
-        (void)sid_lo;
     }
 
-    // Location Codes parsen (ETSI TS 104 089, je 16 Bit pro Code)
-    // Bits 15–4: 12-Bit Location Code, Bits 3–0: reserviert
-    int loc_bytes = length - (offset / 8);
-    asaHasRegion = (loc_bytes >= 2);
-
-    if (loc_bytes >= 2) {
-        uint16_t loc_code = getBits(d, offset, 12);  // 12-Bit Location Code
-        asaRegionId = loc_code;
-        std::clog << "fib-processor: FIG 0/15 location_code=0x"
-                  << std::hex << loc_code << std::dec
-                  << " (" << loc_bytes / 2 << " codes total)\n";
+    // Status-Feld: nur bei Trigger (01) und Pre-trigger (00)
+    bool alert_active = false;
+    uint8_t iid = 0;
+    uint8_t stage = 0;
+    if ((phase == 0 || phase == 1) && offset / 8 < length) {
+        uint8_t last_flag = getBits_1(d, offset);     // Last flag
+        stage             = getBits_3(d, offset + 1); // Stage
+        iid               = getBits_4(d, offset + 4); // Incident ID
+        // Alert aktiv wenn Phase=Trigger und Stage != Test(7)
+        alert_active = (phase == 1) && (stage != 7);
+        offset += 8;
+        (void)last_flag;
     }
 
-    // Holdover-Logik:
-    // - Wenn active=1: Timestamp merken, active setzen
-    // - Wenn active=0: active erst auf false wenn Holdover-Fenster abgelaufen
+    // is_test: Stage == Test(0b111)
+    bool is_test = (stage == 7);
+
+    // Location Codes parsen (Annex E)
+    // Struktur pro Code: NFF(2)+Zone(6)+SCF(1)+NumDigits(3)+Digit1(4)+OtherDigits+Padding+SubCodes
+    bool has_region = false;
+    uint8_t  first_zone = 0;
+    uint8_t  first_digit1 = 0;
+    uint8_t  first_num_digits = 0;
+    uint32_t first_cc = 0;
+
+    int loc_bits_start = offset;
+    int loc_bits_end = length * 8;
+
+    if (offset < loc_bits_end) {
+        has_region = true;
+
+        // Ersten Location Code dekodieren
+        uint8_t nff        = getBits_2(d, offset);     // Anzahl weiterer FIG 0/15
+        uint8_t zone       = getBits(d, offset + 2, 6);// Zone (0-41)
+        uint8_t scf        = getBits_1(d, offset + 8); // Sub-codes present?
+        uint8_t num_digits = getBits_3(d, offset + 9); // Anzahl weiterer Digits (0-5)
+        uint8_t digit1     = getBits_4(d, offset + 12);// Erste Hex-Ziffer
+        offset += 16;
+        (void)nff;
+
+        // OtherDigits: num_digits × 4 Bit
+        uint32_t other_digits = 0;
+        if (num_digits > 0) {
+            other_digits = getBits(d, offset, num_digits * 4);
+            offset += num_digits * 4;
+        }
+
+        // Padding wenn num_digits ungerade
+        if (num_digits % 2 == 1) {
+            offset += 4; // 4-Bit Padding
+        }
+
+        // Sub-codes (16 Bit) falls SCF=1
+        uint16_t subcodes = 0;
+        if (scf) {
+            subcodes = getBits(d, offset, 16);
+            offset += 16;
+        }
+        (void)subcodes;
+
+        // Combined Code rekonstruieren: Digit1 + OtherDigits linksbündig auf 24 Bit
+        // Digit1 ist die MSB-Hex-Ziffer
+        first_cc = ((uint32_t)digit1 << 20);
+        if (num_digits > 0) {
+            // OtherDigits linksbündig einsetzen
+            first_cc |= (other_digits << ((5 - num_digits) * 4));
+        }
+
+        first_zone       = zone;
+        first_digit1     = digit1;
+        first_num_digits = num_digits + 1; // +1 für Digit1 selbst
+
+        std::clog << "fib-processor: FIG 0/15 location"
+                  << " zone=" << (int)zone
+                  << " digit1=0x" << std::hex << (int)digit1
+                  << " num_digits=" << std::dec << (int)(num_digits+1)
+                  << " cc=0x" << std::hex << first_cc << std::dec
+                  << "\n";
+    }
+
+    // Holdover-Logik
     const auto now = std::chrono::system_clock::now();
     if (alert_active) {
         asaLastAlertSeen = now;
@@ -721,23 +782,31 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
             if (elapsed >= ASA_HOLDOVER_SECONDS) {
                 asaActive = false;
             }
-            // sonst: asaActive bleibt true (Holdover läuft noch)
         }
     }
 
-    // Restliche Felder immer aktualisieren
-    asaEwsEnsemble = true;
-    asaIsTest      = (is_test == 1);
-    asaLevel       = level;
-    asaIId         = iid;
+    // State aktualisieren
+    asaEwsEnsemble      = true;
+    asaIsTest           = is_test;
+    asaLevel            = 0; // wird aus Stage abgeleitet: 0xx=Level1, 1xx=Level2
+    if (stage < 4) asaLevel = 1;
+    else if (stage < 7) asaLevel = 2;
+    asaIId              = iid;
+    asaHasRegion        = has_region;
+    asaRegionZone       = first_zone;
+    asaRegionDigit1     = first_digit1;
+    asaRegionNumDigits  = first_num_digits;
+    asaRegionCC         = first_cc;
+    asaRegionId         = ((uint16_t)first_zone << 6) | (first_digit1 & 0xF);
 
     asaLastChange = std::chrono::system_clock::to_time_t(now);
 
     std::clog << "fib-processor: FIG 0/15"
+              << " phase=" << (int)phase
               << " active=" << alert_active
               << " (asaActive=" << asaActive << ")"
-              << " is_test=" << (int)is_test
-              << " level=" << (int)level
+              << " is_test=" << is_test
+              << " stage=" << (int)stage
               << " iid=" << (int)iid
               << "\n";
 }
@@ -1464,17 +1533,20 @@ FIBProcessor::AsaState FIBProcessor::getAsaState() const
 {
     std::lock_guard<std::mutex> lock(mutex);
     AsaState s;
-    s.active       = asaActive;
-    s.ews_ensemble = asaEwsEnsemble;
-    s.is_test      = asaIsTest;
-    s.level        = asaLevel;
-    s.iid          = asaIId;
-    s.asw_flags    = asaAswFlags;
-    s.cluster_id   = asaClusterId;
-    s.last_change  = asaLastChange;
-    s.has_region   = asaHasRegion;
-    s.region_id    = asaRegionId;
-    s.status       = asaIsTest ? "test" : "actual";
+    s.active          = asaActive;
+    s.ews_ensemble    = asaEwsEnsemble;
+    s.is_test         = asaIsTest;
+    s.level           = asaLevel;
+    s.iid             = asaIId;
+    s.asw_flags       = asaAswFlags;
+    s.cluster_id      = asaClusterId;
+    s.last_change     = asaLastChange;
+    s.has_region      = asaHasRegion;
+    s.region_zone     = asaRegionZone;
+    s.region_num_digits = asaRegionNumDigits;
+    s.region_cc       = asaRegionCC;
+    s.region_id       = ((uint16_t)asaRegionZone << 6) | (asaRegionDigit1 & 0xF);
+    s.status          = asaIsTest ? "test" : "actual";
     return s;
 }
 

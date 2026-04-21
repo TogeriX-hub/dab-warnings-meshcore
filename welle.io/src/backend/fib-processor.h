@@ -65,7 +65,10 @@ class FIBProcessor {
             uint8_t cluster_id = 0;    // Legacy (FIG 0/19)
             std::time_t last_change = 0;
             bool has_region = false;
-            uint16_t region_id = 0;    // 12-Bit Location Code aus FIG 0/15
+            uint8_t  region_zone = 0;       // Zone (0-41) laut Annex F
+            uint8_t  region_num_digits = 0; // Anzahl Digits im Location Code
+            uint32_t region_cc = 0;         // Combined Code (bis zu 24 Bit, linksbündig)
+            uint16_t region_id = 0;         // Kompakt: Zone<<6 | Digit1 (für JSON-Kompatibilität)
             std::string status;        // "actual" oder "test"
         };
         AsaState getAsaState() const;
@@ -160,7 +163,11 @@ class FIBProcessor {
         uint8_t asaClusterId = 0;
         std::time_t asaLastChange = 0;
         bool asaHasRegion = false;
-        uint16_t asaRegionId = 0;   // 12-Bit Location Code
+        uint16_t asaRegionId = 0;       // Zone(6)+Digit1(4) des ersten Location Codes
+        uint8_t  asaRegionZone = 0;     // Zone (0-41)
+        uint8_t  asaRegionDigit1 = 0;   // Erste Hex-Ziffer des CC
+        uint8_t  asaRegionNumDigits = 0;// Anzahl Digits im Code
+        uint32_t asaRegionCC = 0;       // Vollständiger Combined Code (bis zu 24 Bit)
         // Holdover: Zeitpunkt des letzten active=true – für 10s-Fenster
         std::chrono::system_clock::time_point asaLastAlertSeen;
 

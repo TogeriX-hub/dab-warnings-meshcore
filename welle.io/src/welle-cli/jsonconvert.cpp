@@ -212,7 +212,6 @@ static void to_json(nlohmann::json& j, const PeakJson& peak)
 // Felder aus FIG 0/15 (ETSI TS 104 089 V1.1.1, 2024-09)
 static void to_json(nlohmann::json& j, const AsaJson& asa) {
     j = nlohmann::json{
-        // FIG 0/15 Felder (neu, ETSI TS 104 089)
         {"active",       asa.active},
         {"ews_ensemble", asa.ews_ensemble},
         {"is_test",      asa.is_test},
@@ -222,7 +221,10 @@ static void to_json(nlohmann::json& j, const AsaJson& asa) {
         {"last_change",  asa.last_change},
         {"has_region",   asa.has_region},
         {"region_id",    asa.region_id},
-        // Legacy FIG 0/19 Felder (Kompatibilitaet)
+        {"region_zone",      asa.region_zone},
+        {"region_num_digits",asa.region_num_digits},
+        {"region_cc",    asa.region_cc},
+        // Legacy FIG 0/19
         {"asw_flags",        asa.asw_flags},
         {"emergency_warning",(asa.asw_flags & 0x0100) != 0},
         {"cluster_id",       asa.cluster_id}

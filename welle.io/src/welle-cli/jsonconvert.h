@@ -130,16 +130,19 @@ struct PeakJson {
 
 struct AsaJson {
     bool active = false;
-    bool ews_ensemble = false; // Heartbeat empfangen → Ensemble ist EWS-fähig
+    bool ews_ensemble = false;
     bool is_test = false;
-    uint8_t level = 0;         // Alert Level (1 oder 2)
-    uint8_t iid = 0;           // Incident ID
+    uint8_t level = 0;
+    uint8_t iid = 0;
     uint16_t asw_flags = 0;
     uint8_t cluster_id = 0;
     std::time_t last_change = 0;
     bool has_region = false;
-    uint16_t region_id = 0;  // 12-Bit Location Code
-    std::string status;        // "actual" oder "test"
+    uint16_t region_id = 0;         // Kompakt: Zone<<6|Digit1 (für Rückwärtskompatibilität)
+    uint8_t  region_zone = 0;       // Zone (0-41) laut Annex F
+    uint8_t  region_num_digits = 0; // Anzahl Digits im Location Code
+    uint32_t region_cc = 0;         // Combined Code linksbündig (24 Bit)
+    std::string status;
 };
 
 // Journaline object for JSON serialisation (ETSI TS 102 979)
