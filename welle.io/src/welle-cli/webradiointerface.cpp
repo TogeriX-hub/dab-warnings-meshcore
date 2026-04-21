@@ -808,17 +808,20 @@ bool WebRadioInterface::send_mux_json(Socket& s)
         // ASA (Automatic Safety Alert)
         {
             const auto asa = rx->getAsaState();
-            last_asa.active       = asa.active;
-            last_asa.ews_ensemble = asa.ews_ensemble;
-            last_asa.is_test      = asa.is_test;
-            last_asa.level        = asa.level;
-            last_asa.iid          = asa.iid;
-            last_asa.asw_flags    = asa.asw_flags;
-            last_asa.cluster_id   = asa.cluster_id;
-            last_asa.last_change  = asa.last_change;
-            last_asa.has_region   = asa.has_region;
-            last_asa.region_id    = asa.region_id;
-            last_asa.status       = asa.status;
+            last_asa.active           = asa.active;
+            last_asa.ews_ensemble     = asa.ews_ensemble;
+            last_asa.is_test          = asa.is_test;
+            last_asa.level            = asa.level;
+            last_asa.iid              = asa.iid;
+            last_asa.asw_flags        = asa.asw_flags;
+            last_asa.cluster_id       = asa.cluster_id;
+            last_asa.last_change      = asa.last_change;
+            last_asa.has_region       = asa.has_region;
+            last_asa.region_id        = asa.region_id;
+            last_asa.region_zone      = asa.region_zone;
+            last_asa.region_num_digits= asa.region_num_digits;
+            last_asa.region_cc        = asa.region_cc;
+            last_asa.status           = asa.status;
         }
         mux_json.asa = last_asa;
 
