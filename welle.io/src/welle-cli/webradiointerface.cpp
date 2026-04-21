@@ -827,7 +827,9 @@ bool WebRadioInterface::send_mux_json(Socket& s)
             lock_guard<mutex> rlock(rx_mut);
             if (rx and not journaline_decode_started) {
                 const auto jinfo = rx->getJournalineInfo();
-                if (jinfo.present) {
+                // Warten bis FIG 0/3 vollständig ist (scid > 0 bedeutet packetAddress bekannt)
+                // Sonst wird ein falscher Subchannel gewählt (Timing-Problem beim Start)
+                if (jinfo.present && jinfo.scid > 0) {
                     // Eigenen Handler erstellen – Paketdienste sind nicht in phs
                     if (!journaline_ph) {
                         journaline_ph = make_unique<WebProgrammeHandler>(
@@ -839,6 +841,8 @@ bool WebRadioInterface::send_mux_json(Socket& s)
                         journaline_decode_started = true;
                         clog << "WebRadioInterface: Journaline decoding started\n";
                     }
+                } else if (jinfo.present && jinfo.scid == 0) {
+                    clog << "WebRadioInterface: Journaline erkannt aber FIG 0/3 noch nicht vollständig (scid=0) – warte...\n";
                 }
             }
         }

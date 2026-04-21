@@ -247,25 +247,38 @@ bool RadioReceiver::addJournalineToDecode(ProgrammeHandlerInterface& handler)
         return false;
     }
 
-    // FIG 0/13 setzt journalineSId auf den zuletzt gesehenen Service –
-    // das kann ein Service mit noch unvollständigem FIG 0/3 sein (subChId=0).
-    // Daher: alle bekannten Services durchsuchen und den ersten nehmen,
-    // dessen Packet-Component einen validen Subchannel mit subChId > 0 hat.
-    //
-    // Fallback: falls kein Service mit subChId > 0 gefunden wird,
-    // trotzdem den ersten validen (subChId=0 erlaubt) versuchen –
-    // 0 ist zwar selten, aber technisch ein gültiger subChId-Wert.
+    clog << "RadioReceiver: addJournalineToDecode called"
+         << " journalineSId=0x" << hex << info.service_id
+         << " scid=0x" << info.scid
+         << " apptype=0x" << info.apptype << dec << "\n";
 
+    // Alle PacketData-Services diagnostisch ausgeben
     const auto services = ficHandler.fibProcessor.getServiceList();
-
-    // Erster Pass: subChId > 0 (eindeutig vollständig dekodiert)
+    clog << "RadioReceiver: Scanning " << services.size() << " services for PacketData:\n";
     for (const auto& svc : services) {
         const auto comps = ficHandler.fibProcessor.getComponents(svc);
         for (const auto& sc : comps) {
             if (sc.transportMode() != TransportMode::PacketData) continue;
             const auto subch = ficHandler.fibProcessor.getSubchannel(sc);
+            clog << "  SId=0x" << hex << svc.serviceId
+                 << " SCId=0x" << sc.SCId
+                 << " subChId=" << dec << subch.subChId
+                 << " packetAddr=0x" << hex << sc.packetAddress
+                 << " valid=" << subch.valid()
+                 << (svc.serviceId == info.service_id ? " ← journalineSId" : "")
+                 << dec << "\n";
+        }
+    }
+
+    // Erster Pass: nur journalineSId, subChId > 0 (FIG 0/3 vollständig)
+    for (const auto& svc : services) {
+        if (svc.serviceId != info.service_id) continue;
+        const auto comps = ficHandler.fibProcessor.getComponents(svc);
+        for (const auto& sc : comps) {
+            if (sc.transportMode() != TransportMode::PacketData) continue;
+            const auto subch = ficHandler.fibProcessor.getSubchannel(sc);
             if (!subch.valid()) continue;
-            if (subch.subChId == 0) continue;  // FIG 0/3 noch nicht vollständig
+            if (subch.subChId == 0) continue;
             if (sc.packetAddress == 0) continue;
 
             clog << "RadioReceiver: Adding Journaline subchannel "
@@ -278,16 +291,17 @@ bool RadioReceiver::addJournalineToDecode(ProgrammeHandlerInterface& handler)
         }
     }
 
-    // Zweiter Pass: auch subChId=0 akzeptieren (falls Sender das wirklich so sendet)
+    // Zweiter Pass: nur journalineSId, subChId=0 erlaubt
     for (const auto& svc : services) {
+        if (svc.serviceId != info.service_id) continue;
         const auto comps = ficHandler.fibProcessor.getComponents(svc);
         for (const auto& sc : comps) {
             if (sc.transportMode() != TransportMode::PacketData) continue;
             const auto subch = ficHandler.fibProcessor.getSubchannel(sc);
             if (!subch.valid()) continue;
-            if (sc.packetAddress == 0) continue;  // keine gültige Paketadresse
+            if (sc.packetAddress == 0) continue;
 
-            clog << "RadioReceiver: Adding Journaline subchannel (fallback) "
+            clog << "RadioReceiver: Adding Journaline subchannel (fallback subChId=0) "
                  << subch.subChId
                  << " packetAddress=0x" << hex << sc.packetAddress
                  << " SId=0x" << svc.serviceId << dec << "\n";
@@ -297,6 +311,7 @@ bool RadioReceiver::addJournalineToDecode(ProgrammeHandlerInterface& handler)
         }
     }
 
-    cerr << "RadioReceiver: Journaline PacketData subchannel not found\n";
+    cerr << "RadioReceiver: Journaline PacketData subchannel not found for SId=0x"
+         << hex << info.service_id << dec << "\n";
     return false;
 }
