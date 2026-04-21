@@ -1,18 +1,23 @@
 """
-dab_listener.py – WarnBridge Phase 3c/3d
+dab_listener.py – WarnBridge Phase 3c/3d/3e
 Pollt die welle-cli HTTP-API alle 2 Sekunden.
-- /mux.json: ASA-Flag, SNR, ews_ensemble
+- /mux.json: ASA-Flag, SNR, ews_ensemble, Location Codes
 - /journaline.json: Journaline/TPEG/EPG Pakete
 
 Auswertungslogik:
-  ASA aktiv + Journaline-Titel enthält Keyword + Objekt ist neu (nicht in Baseline) → NormalizedWarning
+  ASA aktiv + Geocode-Match + Journaline-Titel enthält Keyword + Objekt neu → NormalizedWarning
   Kein ASA → Objekte zur Baseline hinzufügen, kein Mesh
   service_type=="tpeg"/"epg" → nur RxLog
+
+Geocode-Filter (ETSI TS 104 089 Annex A/F):
+  asa_geocode in config.yaml im Präsentationsformat (z.B. 1257-1533-2371).
+  Wird beim Start in Zone + Combined Code dekodiert.
+  Präfix-Matching: Alert-Code muss Präfix des Receiver-Codes sein.
+  Kein Location Code im Alert → gesamtes Ensemble betroffen → immer relevant.
 
 Baseline-Mechanismus:
   Alle Journaline-object_ids die OHNE aktives ASA gesehen werden, landen in _baseline_ids.
   Bei aktivem ASA werden nur Objekte ausgewertet die NICHT in der Baseline sind.
-  So werden normale DLF-Nachrichten die zufällig parallel laufen herausgefiltert.
 
 Log-Rotation:
   RxLog wird alle 24h geleert (läuft monatelang durch).
@@ -61,6 +66,55 @@ REQUEST_TIMEOUT = aiohttp.ClientTimeout(
 )
 
 
+def _parse_presentation_code(pres: str) -> Optional[tuple[int, int, int]]:
+    """
+    Dekodiert einen DAB Location Code im Präsentationsformat (z.B. '1257-1533-2371')
+    nach ETSI TS 104 089 Annex A.
+    Gibt (zone, cc_24bit, num_digits=6) zurück, oder None bei Fehler.
+    cc_24bit ist linksbündig in 24 Bit gespeichert.
+    """
+    try:
+        parts = pres.strip().split("-")
+        if len(parts) != 3 or not all(len(p) == 4 for p in parts):
+            return None
+        # Präsentationssymbole 1-8 → Oktal 0-7
+        groups = []
+        for p in parts:
+            oct_str = "".join(str(int(c) - 1) for c in p)
+            groups.append(int(oct_str, 8))
+        # 36-Bit Integer
+        val36 = (groups[0] << 24) | (groups[1] << 12) | groups[2]
+        # Checksum validieren (mod 61)
+        checksum = val36 & 0x3F
+        loc30 = val36 >> 6
+        if loc30 % 61 != checksum:
+            return None
+        zone = (loc30 >> 24) & 0x3F
+        cc = loc30 & 0xFFFFFF
+        return (zone, cc, 6)
+    except Exception:
+        return None
+
+
+def _location_match(receiver_zone: int, receiver_cc: int,
+                    alert_zone: int, alert_cc: int, alert_num_digits: int) -> bool:
+    """
+    Präfix-Matching laut ETSI TS 104 089 Clause 7.5.4.
+    Alert-Code ist Präfix des Receiver-Codes wenn:
+      - Zone identisch
+      - Erste alert_num_digits Hex-Ziffern von links identisch
+    """
+    if receiver_zone != alert_zone:
+        return False
+    if alert_num_digits == 0:
+        # Kein Digit → gesamte Zone → immer Match
+        return True
+    # Maske: nur die ersten alert_num_digits Nibbles (linksbündig in 24 Bit)
+    shift = (6 - alert_num_digits) * 4
+    mask = ((1 << (alert_num_digits * 4)) - 1) << shift
+    return (receiver_cc & mask) == (alert_cc & mask)
+
+
 class DabListener:
     def __init__(self, config: dict, on_warning: CallbackType):
         self.cfg = config
@@ -69,6 +123,19 @@ class DabListener:
         self.forward_tests = config.get("forward_tests", False)
         self.asa_geocode_filter = config.get("asa_geocode", "").strip()
         self.keywords = [k.lower() for k in config.get("journaline_keywords", DEFAULT_KEYWORDS)]
+
+        # Standort-Code parsen (Annex A → Zone + CC)
+        self._receiver_zone: Optional[int] = None
+        self._receiver_cc: Optional[int] = None
+        if self.asa_geocode_filter:
+            parsed = _parse_presentation_code(self.asa_geocode_filter)
+            if parsed:
+                self._receiver_zone, self._receiver_cc, _ = parsed
+                logger.info("DAB-Listener: Standort-Code %s → Z%d:0x%06X",
+                            self.asa_geocode_filter, self._receiver_zone, self._receiver_cc)
+            else:
+                logger.warning("DAB-Listener: Ungültiger asa_geocode: '%s' – Geocode-Filter deaktiviert",
+                               self.asa_geocode_filter)
 
         self._last_change: int = -1
         self._active_since: Optional[datetime] = None
@@ -231,15 +298,6 @@ class DabListener:
         self._asa_is_test = is_test
         self._asa_level = asa.get("level", 0)
 
-        # Geocode-Filter prüfen
-        if active and self.asa_geocode_filter:
-            # Wir haben noch keinen vollständigen Location-Code-Decoder –
-            # Filter nur wenn has_region=True und wir einen Code haben
-            # Für jetzt: wenn Geocode-Filter gesetzt ist und has_region=False → ignorieren
-            has_region = asa.get("has_region", False)
-            if not has_region:
-                logger.debug("ASA: Geocode-Filter aktiv aber has_region=False – ignoriert")
-
         # ASA beendet
         if not active and self._active_since:
             duration = (datetime.now(timezone.utc) - self._active_since).seconds
@@ -261,15 +319,39 @@ class DabListener:
 
         if active:
             self._active_since = datetime.now(timezone.utc)
-            status_str = asa.get("status", "actual")
-            region_id = asa.get("region_id", 0)
             has_region = asa.get("has_region", False)
-            cluster_id = asa.get("cluster_id", 0)
+            alert_zone = asa.get("region_zone", 0)
+            alert_cc = asa.get("region_cc", 0)
+            alert_num_digits = asa.get("region_num_digits", 0)
 
             logger.info(
-                "🚨 DAB+ ASA AKTIV | test=%s status=%s level=%s region_id=%s has_region=%s cluster=%s",
-                is_test, status_str, self._asa_level, region_id, has_region, cluster_id
+                "🚨 DAB+ ASA AKTIV | test=%s level=%s zone=%s num_digits=%s cc=0x%06X",
+                is_test, self._asa_level, alert_zone, alert_num_digits, alert_cc
             )
+
+            # Geocode-Filter
+            if self._receiver_zone is not None and has_region and alert_num_digits > 0:
+                match = _location_match(
+                    self._receiver_zone, self._receiver_cc,
+                    alert_zone, alert_cc, alert_num_digits
+                )
+                if not match:
+                    logger.info(
+                        "ASA: Geocode-Filter – kein Match "
+                        "(Alert Z%d:0x%06X/%dD vs Receiver Z%d:0x%06X) – ignoriert",
+                        alert_zone, alert_cc, alert_num_digits,
+                        self._receiver_zone, self._receiver_cc
+                    )
+                    return
+                else:
+                    logger.info(
+                        "ASA: Geocode-Match! Alert Z%d:0x%06X/%dD trifft Receiver Z%d:0x%06X",
+                        alert_zone, alert_cc, alert_num_digits,
+                        self._receiver_zone, self._receiver_cc
+                    )
+            elif not has_region or alert_num_digits == 0:
+                # Kein Location Code → gesamtes Ensemble-Gebiet → immer relevant
+                logger.info("ASA: Kein Location Code → gesamtes Ensemble, Alert relevant")
 
             w = self._build_asa_warning(asa, mux, journaline_text=None)
             if w:
@@ -473,4 +555,7 @@ class DabListener:
             "journaline_service_type": self._journaline_service_type,
             "rxlog_count": len(self._rxlog),
             "baseline_count": len(self._baseline_ids),
+            "geocode_filter": self.asa_geocode_filter or None,
+            "receiver_zone": self._receiver_zone,
+            "receiver_cc": f"0x{self._receiver_cc:06X}" if self._receiver_cc is not None else None,
         }

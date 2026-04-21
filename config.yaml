@@ -1,5 +1,5 @@
 dab:
-  asa_geocode: 1257-1533-2371
+  asa_geocode: 1253-3513-3163
   channel: 5C
   forward_tests: true
   welle_cli_path: ./welle.io/build/welle-cli
@@ -16,7 +16,7 @@ meshcore:
   simulator: true
 nina:
   broadcast_districts:
-  - 08121
+  - 08211
   poll_interval_minutes: 15
   region_state: 08
   sources:
