@@ -303,59 +303,66 @@ class DabListener:
             duration = (datetime.now(timezone.utc) - self._active_since).seconds
             logger.info("DAB+ ASA beendet (Dauer: %ds)", duration)
             self._active_since = None
+            self._last_change = -1  # Reset damit nächster Alert erkannt wird
             self._seen_journaline_ids.clear()
             self._new_objects_this_session = 0
-
-        # Keine Änderung
-        if last_change == self._last_change:
             return
 
-        prev_change = self._last_change
+        # Nicht aktiv
+        if not active:
+            if self._last_change == -1:
+                self._last_change = last_change  # Initialisierung beim ersten Poll
+            return
+
+        # Ab hier: active=True
+
+        # Alert läuft bereits → nicht nochmal senden
+        # Verhindert Mehrfach-Alerts durch wiederholte FIG 0/15 Instanzen (Alert-Set)
+        if self._active_since is not None:
+            self._last_change = last_change
+            return
+
+        # Neuer Alert – erste Auslösung
         self._last_change = last_change
+        self._active_since = datetime.now(timezone.utc)
 
-        # Beim ersten Poll ohne aktiven Alarm: nichts tun
-        if prev_change == -1 and not active:
-            return
+        has_region = asa.get("has_region", False)
+        alert_zone = asa.get("region_zone", 0)
+        alert_cc = asa.get("region_cc", 0)
+        alert_num_digits = asa.get("region_num_digits", 0)
 
-        if active:
-            self._active_since = datetime.now(timezone.utc)
-            has_region = asa.get("has_region", False)
-            alert_zone = asa.get("region_zone", 0)
-            alert_cc = asa.get("region_cc", 0)
-            alert_num_digits = asa.get("region_num_digits", 0)
+        logger.info(
+            "🚨 DAB+ ASA AKTIV | test=%s level=%s zone=%s num_digits=%s cc=0x%06X",
+            is_test, self._asa_level, alert_zone, alert_num_digits, alert_cc
+        )
 
-            logger.info(
-                "🚨 DAB+ ASA AKTIV | test=%s level=%s zone=%s num_digits=%s cc=0x%06X",
-                is_test, self._asa_level, alert_zone, alert_num_digits, alert_cc
+        # Geocode-Filter
+        if self._receiver_zone is not None and has_region and alert_num_digits > 0:
+            matched = _location_match(
+                self._receiver_zone, self._receiver_cc,
+                alert_zone, alert_cc, alert_num_digits
             )
-
-            # Geocode-Filter
-            if self._receiver_zone is not None and has_region and alert_num_digits > 0:
-                match = _location_match(
-                    self._receiver_zone, self._receiver_cc,
-                    alert_zone, alert_cc, alert_num_digits
+            if not matched:
+                logger.info(
+                    "ASA: Geocode-Filter – kein Match "
+                    "(Alert Z%d:0x%06X/%dD vs Receiver Z%d:0x%06X) – ignoriert",
+                    alert_zone, alert_cc, alert_num_digits,
+                    self._receiver_zone, self._receiver_cc
                 )
-                if not match:
-                    logger.info(
-                        "ASA: Geocode-Filter – kein Match "
-                        "(Alert Z%d:0x%06X/%dD vs Receiver Z%d:0x%06X) – ignoriert",
-                        alert_zone, alert_cc, alert_num_digits,
-                        self._receiver_zone, self._receiver_cc
-                    )
-                    return
-                else:
-                    logger.info(
-                        "ASA: Geocode-Match! Alert Z%d:0x%06X/%dD trifft Receiver Z%d:0x%06X",
-                        alert_zone, alert_cc, alert_num_digits,
-                        self._receiver_zone, self._receiver_cc
-                    )
-            elif not has_region or alert_num_digits == 0:
-                # Kein Location Code → gesamtes Ensemble-Gebiet → immer relevant
-                logger.info("ASA: Kein Location Code → gesamtes Ensemble, Alert relevant")
+                self._active_since = None  # Session nicht starten bei gefiltertem Alert
+                return
+            else:
+                logger.info(
+                    "ASA: Geocode-Match! Alert Z%d:0x%06X/%dD trifft Receiver Z%d:0x%06X",
+                    alert_zone, alert_cc, alert_num_digits,
+                    self._receiver_zone, self._receiver_cc
+                )
+        elif not has_region or alert_num_digits == 0:
+            logger.info("ASA: Kein Location Code → gesamtes Ensemble, Alert relevant")
 
-            w = self._build_asa_warning(asa, mux, journaline_text=None)
-            if w:
-                await self.on_warning(w)
+        w = self._build_asa_warning(asa, mux, journaline_text=None)
+        if w:
+            await self.on_warning(w)
 
     async def _process_journaline(self, jl_data: dict):
         """
