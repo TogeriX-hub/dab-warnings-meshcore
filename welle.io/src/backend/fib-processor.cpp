@@ -649,6 +649,11 @@ void FIBProcessor::FIG0Extension14 (uint8_t *d)
 //   Trigger:    Id-Feld + Status-Feld + Location Codes → Alarm aktiv
 //   Sustain:    Id-Feld → Alarm läuft noch
 //   End:        Id-Feld, C/N=1 → Alarm beendet
+//
+// Holdover: asaActive bleibt mindestens ASA_HOLDOVER_SECONDS nach dem
+// letzten active=1 auf true, damit der Python-Poller den Alert sicher sieht.
+static constexpr int ASA_HOLDOVER_SECONDS = 10;
+
 void FIBProcessor::FIG0Extension15(uint8_t *d)
 {
     int16_t length = getBits_5(d, 3);  // FIG-Länge in Bytes (inkl. 2-Byte-Header)
@@ -660,8 +665,14 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
     // Heartbeat: kein Payload nach dem Header → Ensemble nimmt an EWS teil
     if (offset / 8 >= length) {
         asaEwsEnsemble = true;
-        asaActive      = false;
-        // Kein last_change-Update beim Heartbeat – nur beim echten Alarm
+        // Beim Heartbeat: Holdover prüfen – active erst auf false wenn Fenster abgelaufen
+        if (asaActive) {
+            auto elapsed = std::chrono::system_clock::now() - asaLastAlertSeen;
+            if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count()
+                    >= ASA_HOLDOVER_SECONDS) {
+                asaActive = false;
+            }
+        }
         return;
     }
 
@@ -676,9 +687,9 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
     // Status-Feld vorhanden? (Trigger/Pre-Trigger haben es, Sustain/End nicht)
     bool alert_active = false;
     if (offset / 8 < length) {
-        uint8_t sid_lo      = getBits_5(d, offset);      // Service ID (5 Bit)
-        alert_active        = getBits_1(d, offset + 5);  // Alert-Flag
-        // uint8_t nff      = getBits_1(d, offset + 6);  // No Further FIG (ignoriert)
+        uint8_t sid_lo  = getBits_5(d, offset);      // Service ID lower (5 Bit)
+        alert_active    = getBits_1(d, offset + 5);  // Alert-Flag
+        // uint8_t nff  = getBits_1(d, offset + 6);  // No Further FIG (ignoriert)
         offset += 8;
         (void)sid_lo;
     }
@@ -689,28 +700,42 @@ void FIBProcessor::FIG0Extension15(uint8_t *d)
     asaHasRegion = (loc_bytes >= 2);
 
     if (loc_bytes >= 2) {
-        // Ersten Location Code auslesen (12 Bit, MSB-first)
         uint16_t loc_code = getBits(d, offset, 12);  // 12-Bit Location Code
-        asaRegionId = loc_code;  // als uint16_t speichern!
-
+        asaRegionId = loc_code;
         std::clog << "fib-processor: FIG 0/15 location_code=0x"
                   << std::hex << loc_code << std::dec
-                  << " (" << loc_bytes/2 << " codes total)\n";
+                  << " (" << loc_bytes / 2 << " codes total)\n";
     }
 
-    // State aktualisieren
+    // Holdover-Logik:
+    // - Wenn active=1: Timestamp merken, active setzen
+    // - Wenn active=0: active erst auf false wenn Holdover-Fenster abgelaufen
+    const auto now = std::chrono::system_clock::now();
+    if (alert_active) {
+        asaLastAlertSeen = now;
+        asaActive        = true;
+    } else {
+        if (asaActive) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - asaLastAlertSeen).count();
+            if (elapsed >= ASA_HOLDOVER_SECONDS) {
+                asaActive = false;
+            }
+            // sonst: asaActive bleibt true (Holdover läuft noch)
+        }
+    }
+
+    // Restliche Felder immer aktualisieren
     asaEwsEnsemble = true;
-    asaActive      = alert_active;
     asaIsTest      = (is_test == 1);
     asaLevel       = level;
     asaIId         = iid;
-    asaHasRegion   = (loc_bytes > 0);
 
-    asaLastChange = std::chrono::system_clock::to_time_t(
-            std::chrono::system_clock::now());
+    asaLastChange = std::chrono::system_clock::to_time_t(now);
 
     std::clog << "fib-processor: FIG 0/15"
               << " active=" << alert_active
+              << " (asaActive=" << asaActive << ")"
               << " is_test=" << (int)is_test
               << " level=" << (int)level
               << " iid=" << (int)iid
