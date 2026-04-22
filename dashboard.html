@@ -467,6 +467,11 @@
       <span class="save-status" id="save-status"></span>
     </div>
 
+    <div class="save-row" style="margin-top:8px">
+      <button class="btn" id="btn-dedup-clear" onclick="clearDedup()" style="border-color:var(--red);color:var(--red)">🗑 Dedup-Cache leeren</button>
+      <span class="save-status" id="dedup-clear-status"></span>
+    </div>
+
   </div>
 </div>
 
@@ -611,7 +616,7 @@ function applyStatus(s) {
   setText('st-uptime',s.uptime_human||'–');
   setText('st-warnings',(s.db||{}).active_warnings??'–');
   setText('st-dedup',`${(s.dedup||{}).cached_ids||0} IDs`);
-  setText('st-sent',`${s.mesh_sent_1h||0} / ${(s.dedup||{}).max_per_hour||5}`);
+  setText('st-sent',`${(s.dedup||{}).sent_last_hour||0} / ${(s.dedup||{}).max_per_hour||5}`);
   isSimulator=mesh.simulator; updateSimUI();
 }
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
@@ -710,6 +715,27 @@ async function clearSimulator() {
     }
     setTimeout(()=>{btn.textContent='🗑 Simulator & Testwarnungen leeren';btn.disabled=false;},2000);
   }catch(e){btn.textContent='Fehler';setTimeout(()=>{btn.textContent='🗑 Simulator & Testwarnungen leeren';btn.disabled=false;},3000);}
+}
+
+async function clearDedup() {
+  const btn=document.getElementById('btn-dedup-clear');
+  const status=document.getElementById('dedup-clear-status');
+  btn.disabled=true; btn.textContent='Wird geleert...';
+  try {
+    const r=await fetch('/api/dedup/clear',{method:'POST'});
+    const d=await r.json();
+    if(d.ok){
+      status.textContent=`✓ ${d.deleted_ids} IDs + ${d.deleted_hashes} Hashes geleert`;
+      status.style.color='var(--green)';
+    } else {
+      status.textContent='Fehler';
+      status.style.color='var(--red)';
+    }
+    setTimeout(()=>{status.textContent='';btn.textContent='🗑 Dedup-Cache leeren';btn.disabled=false;},3000);
+  }catch(e){
+    status.textContent='Fehler';
+    setTimeout(()=>{status.textContent='';btn.textContent='🗑 Dedup-Cache leeren';btn.disabled=false;},3000);
+  }
 }
 
 // ── Config ────────────────────────────────────────────────────────────

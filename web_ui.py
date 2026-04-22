@@ -37,6 +37,7 @@ class WebUI:
         aio_app.router.add_get("/api/ags/states", self._api_ags_states)
         aio_app.router.add_get("/api/ags/districts", self._api_ags_districts)
         aio_app.router.add_post("/api/simulator/clear", self._api_sim_clear)
+        aio_app.router.add_post("/api/dedup/clear", self._api_dedup_clear)
         aio_app.router.add_get("/", self._handle_index)
         aio_app.router.add_get("/dashboard.html", self._handle_index)
         aio_app.router.add_get("/ws", self._handle_ws)
@@ -189,6 +190,19 @@ class WebUI:
 
         logger.info("Simulator geleert: %d Test-Warnungen gelöscht", deleted)
         return web.json_response({"ok": True, "deleted": deleted})
+
+    async def _api_dedup_clear(self, request: web.Request) -> web.Response:
+        """Dedup-Cache komplett leeren (seen_ids + seen_hashes + hour_window)."""
+        conn = self.app.dedup._get_conn()
+        c1 = conn.execute("DELETE FROM seen_ids").rowcount
+        c2 = conn.execute("DELETE FROM seen_hashes").rowcount
+        conn.commit()
+        self.app.dedup._hour_window.clear()
+        self.app.mesh._sent_log.clear() if hasattr(self.app, 'mesh') else None
+        # mesh_sent_timestamps ebenfalls leeren
+        self.app._mesh_sent_timestamps.clear()
+        logger.info("Dedup-Cache geleert: %d IDs, %d Hashes", c1, c2)
+        return web.json_response({"ok": True, "deleted_ids": c1, "deleted_hashes": c2})
 
     async def _api_broadcasting_get(self, request: web.Request) -> web.Response:
         """Broadcasting-Status abfragen."""
