@@ -590,7 +590,6 @@ int16_t FIBProcessor::HandleFIG0Extension13(
                 // nicht über einen konstruierten SCId-Wert.
                 ServiceComponent* comp = findComponent(SId, SCIds);
                 journalinePresent  = true;
-                journalineSId      = SId;
                 journalineAppType  = static_cast<uint16_t>(appType);
                 if (comp != nullptr) {
                     journalineScId = comp->SCId;
@@ -600,12 +599,24 @@ int16_t FIBProcessor::HandleFIG0Extension13(
                               << " subChId=" << std::dec << comp->subchannelId
                               << " packetAddr=0x" << std::hex << comp->packetAddress
                               << std::dec << "\n";
+                    // journalineSId nur auf Services mit validem Subchannel setzen.
+                    // FIG 0/13 kommt für alle 5 Services auf 5C – der letzte würde
+                    // sonst gewinnen, auch wenn er subChId=0 / packetAddr=0 hat.
+                    // Fix: nur überschreiben wenn dieser Service besser ist.
+                    if (comp->subchannelId > 0 && comp->packetAddress > 0) {
+                        journalineSId = SId;
+                    } else if (journalineSId == 0) {
+                        journalineSId = SId;  // Fallback: noch gar nichts gesetzt
+                    }
                 } else {
                     // Component noch nicht via FIG 0/2 gesehen – normal beim ersten FIG 0/13.
                     // Wird beim nächsten FIC-Zyklus erneut versucht.
                     std::clog << "fib-processor: Journaline SId=0x" << std::hex << SId
                               << " SCIds=" << std::dec << SCIds
                               << " – Component noch nicht bekannt (warten auf FIG 0/2)\n";
+                    if (journalineSId == 0) {
+                        journalineSId = SId;  // Fallback: noch gar nichts gesetzt
+                    }
                 }
                 break;
             }
