@@ -23,7 +23,7 @@ WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingu
 ## Funktionsübersicht
 
 - Empfang von DAB+ Multiplexen über RTL-SDR  
-- Auswertung von ASA (Alarm Signalisation)  
+- Auswertung von ASA (Automatic Safety Alert) inkl. Geocode-Filter (ETSI TS 104 089)  
 - Journaline-Dekodierung für Warntexte (Fraunhofer NML Decoder)  
 - NINA API Integration (MoWaS + DWD)  
 - CAP-Normalisierung (einheitliche Datenstruktur)  
@@ -87,19 +87,31 @@ Das Skript installiert automatisch alle Abhängigkeiten, kompiliert welle-cli un
 
 ## Starten
 
-### welle-cli starten (Terminal 1)
-
 ```bash
-cd welle.io/build
-./welle-cli -c 9D -C 1 -w 7979
-```
-
-### WarnBridge starten (Terminal 2)
-
-```bash
-cd dab-warnings-meshcore
 python3 warnbridge.py
 ```
+
+welle-cli wird automatisch von WarnBridge gestartet. Der Pfad ist in `config.yaml` vorgegeben:
+
+```yaml
+dab:
+  welle_cli_path: ./welle.io/build/welle-cli
+```
+
+---
+
+## Geocode-Filter (ASA)
+
+WarnBridge filtert ASA-Alerts geografisch nach ETSI TS 104 089 Annex A/F.  
+Der Standort-Code wird in `config.yaml` als Präsentationsformat eingegeben:
+
+```yaml
+dab:
+  asa_geocode: 1257-1533-2371  # Beispiel: Sindelfingen
+```
+
+Der Code kann über die offizielle DAB-Lokalisierungsseite ermittelt werden.  
+Auf 5C läuft dauerhaft ein Testalert mit dem Paris-Code `1253-3513-3668` – korrekt konfigurierte Geräte ignorieren diesen.
 
 ---
 
@@ -107,7 +119,8 @@ python3 warnbridge.py
 
 Dieses Projekt enthält eine angepasste Version von welle.io direkt im Repository (`welle.io/`). Der Fork enthält folgende Erweiterungen gegenüber dem Original:
 
-- ASA-Erkennung über FIG 0/15 und FIG 0/19  
+- ASA-Erkennung über FIG 0/15 (ETSI TS 104 089) mit korrektem Location Code Parser  
+- ASA Holdover: `active=true` bleibt 10s nach Alert-Ende (für zuverlässiges Polling)  
 - Packet-Mode Subchannel Decoder  
 - Fraunhofer NML Journaline Decoder (zlib-komprimierte JML-Objekte)  
 - `/journaline.json` und `/rxlog.json` HTTP-Endpunkte  
@@ -127,30 +140,24 @@ Unser Fork: https://github.com/TogeriX-hub/welle.io
 
 ## Projektstatus
 
-<<<<<<< Updated upstream
-- DAB+ Empfang: OK  
-- ASA-Erkennung: OK  
-- NINA Integration: OK  
-- MeshCore Integration: in Entwicklung 
-- Web-Dashboard: OK  
-- Journaline: in Entwicklung
-
-## To-Do:
-
-- Verbesserung der Zuweisung von Journaline zu ASA-Events
-- Duplikaterkennung von ASA Meldungen (Testwarnungen auf 5C)
-- Welle.io Prozesse verschlanken (für Dauerbetrieb)
-- Duplikaterekennung von ASA + gleichzeitig Nina
-- ASA-Warnungen [Test] werden nicht ins Mesh gesendet
-- ASA Geocode funktioniert noch nicht (wichtig für Betrieb von 5C wegen Dauertests)
-=======
 | Komponente | Status |
 |---|---|
 | DAB+ Empfang | ✅ OK |
 | ASA-Erkennung | ✅ OK |
+| ASA Geocode-Filter | ✅ OK (ETSI TS 104 089) |
 | Journaline-Decoder | ✅ OK (getestet auf DLF 5C) |
 | NINA Integration (MoWaS + DWD) | ✅ OK |
 | MeshCore Integration | ✅ OK |
 | Web-Dashboard | ✅ OK |
 | Raspberry Pi Setup | 🔜 Ausstehend |
 | Warntag-Livetest | 🗓 10.09.2026 |
+
+---
+
+## Offene Punkte (Phase 4+)
+
+- Journaline-Zuweisung zu ASA-Events verbessern  
+- Umlaut-Fix in welle.io (`webprogrammehandler.cpp`, UTF-8/Latin-1)  
+- `journalineSId` deterministisch auf den Service mit validem Subchannel setzen  
+- Welle.io Prozesse für Dauerbetrieb stabilisieren (systemd, Watchdog)  
+- Raspberry Pi Setup  
