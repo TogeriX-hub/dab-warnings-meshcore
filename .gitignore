@@ -7,3 +7,4 @@ config.yaml
 warnbridge.db
 .DS_Store
 __pycache__/dedup.cpython-313.pyc
+/__pycache__

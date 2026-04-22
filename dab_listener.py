@@ -43,6 +43,7 @@ WATCHDOG_ERROR_THRESHOLD = 10
 RXLOG_MAX = 50
 MAX_JOURNALINE_NEW_PER_ALERT = 10  # Max neue Objekte pro ASA-Session auswerten
 LOG_ROTATION_HOURS = 24            # RxLog + Baseline alle 24h leeren
+ASA_JOURNALINE_WAIT_SECONDS = 30   # Wartezeit auf Journaline-Text nach ASA-Trigger
 
 # Spezifische Keywords – nur im TITEL prüfen, nicht im Body
 # Zusammengesetzte Begriffe um False-Positives zu vermeiden
@@ -153,7 +154,16 @@ class DabListener:
         self._asa_active: bool = False
         self._asa_is_test: bool = False
         self._asa_level: int = 0
+        self._asa_iid: int = 0            # Incident ID aus FIG 0/15
         self._ews_ensemble: bool = False
+
+        # Warte-Mechanismus: nach ASA-Trigger 30s auf Journaline warten
+        self._asa_pending: bool = False
+        self._asa_pending_since: Optional[datetime] = None
+        self._asa_pending_asa: Optional[dict] = None
+        self._asa_pending_mux: Optional[dict] = None
+        self._asa_journaline_match: Optional[tuple] = None  # (title, body)
+        self._asa_warning_sent: bool = False  # pro Session nur eine Warnung
 
         # RxLog: alle empfangenen Pakete (max RXLOG_MAX)
         self._rxlog: list[dict] = []
@@ -289,37 +299,46 @@ class DabListener:
             await self._process_journaline(jl_data)
 
     async def _process_asa(self, asa: dict, mux: dict):
-        """ASA-Block auswerten, NormalizedWarning erzeugen wenn aktiv."""
+        """ASA-Block auswerten. Bei Geocode-Match: 30s auf Journaline warten,
+        dann eine Warnung senden (mit oder ohne Journaline-Text)."""
         active = asa.get("active", False)
         last_change = asa.get("last_change", 0)
         is_test = asa.get("is_test", False)
+        iid = asa.get("iid", 0)
 
         self._asa_active = active
         self._asa_is_test = is_test
-        self._asa_level = asa.get("level", 0)
+        self._asa_level = asa.get("level", 1)
+        self._asa_iid = iid
 
         # ASA beendet
         if not active and self._active_since:
             duration = (datetime.now(timezone.utc) - self._active_since).seconds
             logger.info("DAB+ ASA beendet (Dauer: %ds)", duration)
             self._active_since = None
-            self._last_change = -1  # Reset damit nächster Alert erkannt wird
+            self._last_change = -1
             self._seen_journaline_ids.clear()
             self._new_objects_this_session = 0
+            # Wenn Warnung noch aussteht: sofort senden (Timeout auf 0 setzen)
+            if self._asa_pending and not self._asa_warning_sent:
+                logger.info("ASA beendet während Wartezeit – sende jetzt")
+                self._asa_pending_since = datetime.now(timezone.utc) - timedelta(seconds=ASA_JOURNALINE_WAIT_SECONDS)
+            await self._check_pending_timeout()
             return
 
-        # Nicht aktiv
+        # Nicht aktiv – Timeout-Check: Warnung noch ausstehend?
         if not active:
             if self._last_change == -1:
-                self._last_change = last_change  # Initialisierung beim ersten Poll
+                self._last_change = last_change
+            await self._check_pending_timeout()
             return
 
         # Ab hier: active=True
 
-        # Alert läuft bereits → nicht nochmal senden
-        # Verhindert Mehrfach-Alerts durch wiederholte FIG 0/15 Instanzen (Alert-Set)
+        # Alert läuft bereits
         if self._active_since is not None:
             self._last_change = last_change
+            await self._check_pending_timeout()
             return
 
         # Neuer Alert – erste Auslösung
@@ -332,8 +351,8 @@ class DabListener:
         alert_num_digits = asa.get("region_num_digits", 0)
 
         logger.info(
-            "🚨 DAB+ ASA AKTIV | test=%s level=%s zone=%s num_digits=%s cc=0x%06X",
-            is_test, self._asa_level, alert_zone, alert_num_digits, alert_cc
+            "🚨 DAB+ ASA AKTIV | iid=%d test=%s level=%s zone=%s num_digits=%s cc=0x%06X",
+            iid, is_test, self._asa_level, alert_zone, alert_num_digits, alert_cc
         )
 
         # Geocode-Filter
@@ -349,7 +368,7 @@ class DabListener:
                     alert_zone, alert_cc, alert_num_digits,
                     self._receiver_zone, self._receiver_cc
                 )
-                self._active_since = None  # Session nicht starten bei gefiltertem Alert
+                self._active_since = None
                 return
             else:
                 logger.info(
@@ -360,9 +379,50 @@ class DabListener:
         elif not has_region or alert_num_digits == 0:
             logger.info("ASA: Kein Location Code → gesamtes Ensemble, Alert relevant")
 
-        w = self._build_asa_warning(asa, mux, journaline_text=None)
-        if w:
-            await self.on_warning(w)
+        # Warte-Mechanismus starten
+        logger.info("ASA: Warte %ds auf Journaline-Text (IID=%d)...",
+                    ASA_JOURNALINE_WAIT_SECONDS, iid)
+        self._asa_pending = True
+        self._asa_pending_since = datetime.now(timezone.utc)
+        self._asa_pending_asa = asa
+        self._asa_pending_mux = mux
+        self._asa_journaline_match = None
+        self._asa_warning_sent = False
+
+    async def _check_pending_timeout(self):
+        """Prüft ob der Warte-Timeout abgelaufen ist und sendet dann die Warnung."""
+        if not self._asa_pending or self._asa_warning_sent:
+            return
+        if self._asa_pending_since is None:
+            return
+
+        elapsed = (datetime.now(timezone.utc) - self._asa_pending_since).total_seconds()
+
+        # Journaline-Match bereits vorhanden → sofort senden
+        if self._asa_journaline_match:
+            title, body = self._asa_journaline_match
+            logger.info("ASA: Journaline-Match → sende Warnung mit Text")
+            w = self._build_asa_warning(
+                self._asa_pending_asa, self._asa_pending_mux,
+                journaline_text=f"{title}\n\n{body}" if body else title
+            )
+            self._asa_warning_sent = True
+            self._asa_pending = False
+            if w:
+                await self.on_warning(w)
+            return
+
+        # Timeout abgelaufen → ohne Journaline senden
+        if elapsed >= ASA_JOURNALINE_WAIT_SECONDS:
+            logger.info("ASA: Timeout nach %ds – sende Warnung ohne Journaline-Text", int(elapsed))
+            w = self._build_asa_warning(
+                self._asa_pending_asa, self._asa_pending_mux,
+                journaline_text=None
+            )
+            self._asa_warning_sent = True
+            self._asa_pending = False
+            if w:
+                await self.on_warning(w)
 
     async def _process_journaline(self, jl_data: dict):
         """
@@ -441,25 +501,29 @@ class DabListener:
                 self._seen_journaline_ids.add(object_id)
                 continue
 
-            # Neues Objekt mit Keyword im Titel bei aktivem ASA → Warnung
+            # Neues Objekt mit Keyword im Titel bei aktivem ASA
             self._seen_journaline_ids.add(object_id)
             self._new_objects_this_session += 1
 
-            logger.info("📋 Journaline-Warntext (ASA aktiv, neu, object_id=%d, keywords=%s): %s",
+            logger.info("📋 Journaline-Match (ASA aktiv, neu, object_id=%d, keywords=%s): %s",
                         object_id, matched, title[:60])
-            w = self._build_journaline_warning(title, body, object_id)
-            if w:
-                await self.on_warning(w)
+
+            # Warte-Mechanismus: Match speichern, _check_pending_timeout() sendet
+            if self._asa_pending and not self._asa_warning_sent:
+                if self._asa_journaline_match is None:
+                    self._asa_journaline_match = (title, body)
 
     def _build_asa_warning(self, asa: dict, mux: dict,
                             journaline_text: Optional[str]) -> Optional[NormalizedWarning]:
-        """Baut NormalizedWarning aus ASA-Block."""
+        """Baut NormalizedWarning aus ASA-Block.
+        Severity aus ASA-Level: 1=Severe, 2=Extreme (ETSI TS 104 089).
+        Identifier basiert auf IID (Incident ID) – eindeutig pro Ereignis.
+        """
         is_test = asa.get("is_test", False)
         status_str = "test" if is_test else "actual"
-
-        if is_test and not self.forward_tests:
-            logger.debug("DAB+ Test-Warnung übersprungen (forward_tests: false)")
-            return None
+        iid = asa.get("iid", 0)
+        level = asa.get("level", 1)
+        severity = "Extreme" if level >= 2 else "Severe"
 
         ensemble = mux.get("ensemble", {})
         ensemble_label = ensemble.get("label", {}).get("shortlabel", "DAB+").strip()
@@ -486,8 +550,8 @@ class DabListener:
             )
 
         instruction = "Offizielle Durchsagen im Radio beachten. Anweisungen der Behörden befolgen."
-        last_change = asa.get("last_change", 0)
-        identifier = f"dab-asa-{'test-' if is_test else ''}{last_change}"
+        # IID als stabiler Identifier – eindeutig pro Ereignis, unabhängig von last_change
+        identifier = f"dab-asa-{'test-' if is_test else ''}iid{iid}"
         now = datetime.now(timezone.utc)
 
         return NormalizedWarning(
@@ -495,7 +559,7 @@ class DabListener:
             identifier=identifier,
             status=status_str,
             msg_type="Alert",
-            severity="Extreme",
+            severity=severity,
             urgency="Immediate",
             headline=headline,
             description=description,
@@ -512,10 +576,6 @@ class DabListener:
         """Baut NormalizedWarning aus Journaline-Objekt (ASA muss aktiv sein)."""
         is_test = self._asa_is_test
         status_str = "test" if is_test else "actual"
-
-        if is_test and not self.forward_tests:
-            logger.debug("Journaline Test-Warnung übersprungen (forward_tests: false)")
-            return None
 
         now = datetime.now(timezone.utc)
         identifier = f"dab-journaline-{object_id}-{int(now.timestamp())}"

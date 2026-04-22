@@ -120,12 +120,11 @@ class WarnBridge:
         """
         logger.debug("Neue Warnung: [%s] %s", w.source, w.headline)
 
-        # Test-Warnungen: nur weiterleiten wenn forward_tests: true
-        if w.status == "test":
-            forward_tests = self.cfg.get("dab", {}).get("forward_tests", False)
-            if not forward_tests:
-                logger.debug("Test-Warnung übersprungen: %s", w.headline)
-                return
+        # Test-Warnungen von DAB: ins Dashboard + DB, aber nur ins Mesh wenn forward_tests: true
+        # NINA-Simulator-Tests (source != "dab") laufen normal durch
+        is_test = w.status == "test"
+        forward_tests = self.cfg.get("dab", {}).get("forward_tests", False)
+        block_mesh = is_test and w.source == "dab" and not forward_tests
 
         # Dedup-Prüfung
         if self.dedup.is_duplicate(w.identifier, w.content_hash):
@@ -133,7 +132,7 @@ class WarnBridge:
             return
 
         # Broadcast-Filter: nur Auto-Alert wenn Kreis in broadcast_districts
-        should_broadcast = self._should_broadcast(w)
+        should_broadcast = self._should_broadcast(w) and not block_mesh
 
         # In DB speichern (immer, für /warnings [Ort] Abfragen)
         db_id = self.db.store(w, broadcast_sent=should_broadcast)
@@ -197,7 +196,11 @@ class WarnBridge:
         broadcast_districts = nina_cfg.get("broadcast_districts", [])
         sources_cfg = nina_cfg.get("sources", {})
 
-        # Kreis-Check
+        # Kreis-Check – nur für NINA (mowas/dwd/lhp)
+        # DAB-Warnungen haben keinen AGS-Code, Geocode-Filter läuft bereits in dab_listener.py
+        if w.source == "dab":
+            return True
+
         if broadcast_districts:
             if w.ags_codes:
                 # AGS-Codes vorhanden: prüfen ob ein betroffener Kreis in broadcast_districts
@@ -309,6 +312,10 @@ class WarnBridge:
 
             if not self._passes_broadcast_filters(w):
                 continue
+
+            if self.dedup.is_rate_limited():
+                logger.warning("Rate-Limit beim Nachsenden – abgebrochen nach %d Warnungen", sent_count)
+                break
 
             w_send = self._prepare_for_broadcast(w)
             logger.info("📤 Nachsenden [%s] %s → Gebiet: %s",
