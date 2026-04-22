@@ -611,7 +611,7 @@ function applyStatus(s) {
   setText('st-uptime',s.uptime_human||'–');
   setText('st-warnings',(s.db||{}).active_warnings??'–');
   setText('st-dedup',`${(s.dedup||{}).cached_ids||0} IDs`);
-  setText('st-sent',`${(s.dedup||{}).sent_last_hour||0} / ${(s.dedup||{}).max_per_hour||5}`);
+  setText('st-sent',`${s.mesh_sent_1h||0} / ${(s.dedup||{}).max_per_hour||5}`);
   isSimulator=mesh.simulator; updateSimUI();
 }
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}

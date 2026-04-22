@@ -112,8 +112,12 @@ class DedupCache:
                 (content_hash, now_str)
             )
         conn.commit()
-        self._hour_window.append(_now())
         logger.debug("Dedup: Als gesehen markiert – %s", identifier)
+
+    def mark_sent(self):
+        """Zählt einen echten Mesh-Send für das Stunden-Rate-Limit.
+        Nur aufrufen wenn mesh.send_warning() erfolgreich war."""
+        self._hour_window.append(_now())
 
     def cleanup_expired(self):
         """Abgelaufene Einträge aus der DB löschen. Täglich aufrufen."""

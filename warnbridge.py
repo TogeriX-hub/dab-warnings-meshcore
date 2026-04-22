@@ -105,6 +105,10 @@ class WarnBridge:
         # Wird bei Config-Reload geleert damit neue Kreise frisch prüfen können
         self._broadcast_sent_hashes: set[str] = set()
 
+        # Zähler für tatsächlich gesendete Mesh-Nachrichten (letzte 60 Minuten)
+        # Unabhängig von Dedup – wird nur bei erfolgreichem mesh.send_warning() befüllt
+        self._mesh_sent_timestamps: list[datetime] = []
+
         # welle-cli Watchdog State
         self._welle_last_restart: Optional[datetime] = None
         self._welle_restart_count: int = 0
@@ -159,6 +163,15 @@ class WarnBridge:
                 success = await self.mesh.send_warning(w_send)
                 if success:
                     self.db.mark_broadcast_sent(db_id)
+                    self.dedup.mark_sent()  # Rate-Limit-Zähler: nur echte Sends
+                    # Zähler für "gesendet 1h" – nur echte Mesh-Sends
+                    now_ts = datetime.now(timezone.utc)
+                    self._mesh_sent_timestamps.append(now_ts)
+                    # Einträge älter als 60 Minuten rauswerfen
+                    self._mesh_sent_timestamps = [
+                        t for t in self._mesh_sent_timestamps
+                        if (now_ts - t).total_seconds() < 3600
+                    ]
                 delay = 1 if self.mesh.simulator else 10
                 await asyncio.sleep(delay)  # Rate-Limiting: 1s Simulator, 10s Mesh
         else:
@@ -303,6 +316,13 @@ class WarnBridge:
             success = await self.mesh.send_warning(w_send)
             if success:
                 self.db.mark_broadcast_sent(entry["db_id"])
+                self.dedup.mark_sent()
+                now_ts = datetime.now(timezone.utc)
+                self._mesh_sent_timestamps.append(now_ts)
+                self._mesh_sent_timestamps = [
+                    t for t in self._mesh_sent_timestamps
+                    if (now_ts - t).total_seconds() < 3600
+                ]
                 sent_count += 1
                 delay = 1 if self.mesh.simulator else 10
                 await asyncio.sleep(delay)  # Rate-Limiting: 1s Simulator, 10s Mesh
@@ -438,9 +458,16 @@ class WarnBridge:
 
     def status(self) -> dict:
         uptime_seconds = int((datetime.now(timezone.utc) - self.start_time).total_seconds())
+        # Einträge älter als 60 Minuten aus dem Zähler entfernen
+        now_ts = datetime.now(timezone.utc)
+        self._mesh_sent_timestamps = [
+            t for t in self._mesh_sent_timestamps
+            if (now_ts - t).total_seconds() < 3600
+        ]
         return {
             "uptime_seconds": uptime_seconds,
             "uptime_human": _format_uptime(uptime_seconds),
+            "mesh_sent_1h": len(self._mesh_sent_timestamps),
             "nina": self.nina.status(),
             "mesh": self.mesh.status(),
             "dedup": self.dedup.stats(),
