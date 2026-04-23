@@ -7,10 +7,11 @@ DAB-Listener kommt in Phase 3 dazu.
 import asyncio
 import logging
 import signal
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from typing import Optional
 
 import yaml
 
@@ -402,31 +403,28 @@ class WarnBridge:
 
     async def _welle_watchdog_loop(self):
         """
-        Überwacht den DAB-Listener. Wenn welle-cli einfriert (Watchdog ausgelöst),
-        wird der Prozess beendet und neu gestartet.
-        Nur aktiv wenn welle_cli_autostart: true in config.yaml (dab-Block).
+        Überwacht den DAB-Listener auf eingefrorenes welle-cli.
+        Reagiert auf watchdog_triggered (gesetzt bei Timeouts UND Connection-Fehlern).
+        Nutzt web_ui.restart_welle() damit PID-Tracking und Binary-Suche korrekt laufen.
+        Aktiv sobald web_ui verfügbar ist – kein extra config-Flag nötig.
         """
-        dab_cfg = self.cfg.get("dab", {})
-        autostart = dab_cfg.get("welle_cli_autostart", False)
+        # Kurz warten bis web_ui vollständig gestartet ist
+        await asyncio.sleep(10)
 
-        if not autostart:
-            logger.debug("welle-cli Watchdog inaktiv (welle_cli_autostart: false)")
-            return
-
-        welle_cmd = dab_cfg.get("welle_cli_cmd", "")
-        if not welle_cmd:
-            logger.warning("welle-cli Watchdog: welle_cli_cmd nicht konfiguriert – Watchdog inaktiv")
-            return
-
-        logger.info("welle-cli Watchdog aktiv (cmd: %s)", welle_cmd)
+        logger.info("welle-cli Watchdog aktiv (Cooldown: %ds, Check-Intervall: %ds)",
+                    WELLE_RESTART_COOLDOWN_SECONDS, WELLE_WATCHDOG_CHECK_INTERVAL)
 
         while True:
             await asyncio.sleep(WELLE_WATCHDOG_CHECK_INTERVAL)
 
+            # Nur aktiv wenn web_ui verfügbar (hat die Start/Stop-Logik)
+            if not self.web_ui:
+                continue
+
             if not self.dab.watchdog_triggered:
                 continue
 
-            # Cooldown prüfen
+            # Cooldown prüfen – verhindert Restart-Schleife
             now = datetime.now(timezone.utc)
             if self._welle_last_restart:
                 elapsed = (now - self._welle_last_restart).total_seconds()
@@ -435,33 +433,28 @@ class WarnBridge:
                     logger.debug("welle-cli Watchdog: Cooldown aktiv, noch %ds", remaining)
                     continue
 
-            # welle-cli neu starten
+            # Neustart durchführen
             self._welle_restart_count += 1
             self._welle_last_restart = now
-            logger.warning("welle-cli Watchdog: Neustart #%d wird durchgeführt...",
-                           self._welle_restart_count)
+            logger.warning(
+                "welle-cli Watchdog: %d Fehler/Timeouts – Neustart #%d...",
+                self.dab._error_count, self._welle_restart_count
+            )
 
-            try:
-                # Alten Prozess beenden
-                subprocess.run(["pkill", "-f", "welle-cli"], capture_output=True)
-                await asyncio.sleep(2)
+            success = await self.web_ui.restart_welle()
 
-                # Neu starten (im Hintergrund, non-blocking)
-                subprocess.Popen(
-                    welle_cmd,
-                    shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                logger.info("welle-cli neu gestartet (cmd: %s)", welle_cmd)
-
-                # DAB-Listener Watchdog zurücksetzen
-                await asyncio.sleep(3)  # kurz warten bis welle-cli hochfährt
+            if success:
+                # DAB-Listener erst zurücksetzen wenn welle-cli hochgefahren ist
+                await asyncio.sleep(5)
                 self.dab.reset_watchdog()
-                logger.info("welle-cli Watchdog: DAB-Listener zurückgesetzt")
-
-            except Exception as e:
-                logger.error("welle-cli Watchdog: Neustart fehlgeschlagen: %s", e)
+                logger.info("welle-cli Watchdog: Neustart #%d erfolgreich, DAB-Listener zurückgesetzt",
+                            self._welle_restart_count)
+            else:
+                # Neustart fehlgeschlagen – trotzdem Watchdog zurücksetzen damit
+                # der nächste Versuch nach Cooldown stattfinden kann
+                self.dab.reset_watchdog()
+                logger.error("welle-cli Watchdog: Neustart #%d fehlgeschlagen",
+                             self._welle_restart_count)
 
     def status(self) -> dict:
         uptime_seconds = int((datetime.now(timezone.utc) - self.start_time).total_seconds())

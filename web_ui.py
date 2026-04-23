@@ -425,6 +425,48 @@ class WebUI:
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)
 
+    async def restart_welle(self) -> bool:
+        """
+        welle-cli intern neu starten (für Watchdog-Nutzung ohne HTTP-Umweg).
+        Gibt True zurück wenn der Neustart erfolgreich war.
+        """
+        binary = self._find_welle_cli()
+        if not binary:
+            logger.error("welle-cli Watchdog: Binary nicht gefunden – Neustart nicht möglich")
+            return False
+
+        # Laufenden Prozess sauber beenden
+        proc = self._welle_process()
+        if proc:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            except Exception as e:
+                logger.warning("welle-cli Watchdog: Beenden fehlgeschlagen: %s", e)
+            self._welle_proc = None
+
+        await asyncio.sleep(2)  # kurz warten damit USB-Handle freigegeben wird
+
+        # Neu starten
+        channel = self.config.get("dab", {}).get("channel", "9D")
+        cmd = [binary, "-c", channel, "-C", "1", "-w", "7979"]
+        try:
+            self._welle_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("welle-cli Watchdog: neu gestartet auf Kanal %s (PID %d)",
+                        channel, self._welle_proc.pid)
+            return True
+        except Exception as e:
+            logger.error("welle-cli Watchdog: Neustart fehlgeschlagen: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # WebSocket
     # ------------------------------------------------------------------
