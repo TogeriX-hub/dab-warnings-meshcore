@@ -35,6 +35,10 @@ using namespace std;
 #define MSG_NOSIGNAL 0
 #endif
 
+// Maximum number of Journaline objects kept in memory per handler.
+// When exceeded the map is cleared and refilled from the carousel.
+static constexpr size_t MAX_JOURNALINE_OBJECTS = 500;
+
 class IEncoder 
 {
     public:
@@ -454,6 +458,15 @@ void WebProgrammeHandler::onJournalineData(
         const std::string& body)
 {
     std::unique_lock<std::mutex> lock(journaline_mutex_);
+
+    // Prevent unbounded memory growth: the Journaline carousel on 5C
+    // continuously delivers hundreds of objects (DLF programme info etc).
+    // Clear and start fresh when the map exceeds the limit – the Python
+    // baseline mechanism in dab_listener.py handles the reset gracefully.
+    if (journaline_objects_.size() >= MAX_JOURNALINE_OBJECTS) {
+        journaline_objects_.clear();
+    }
+
     journaline_t obj;
     obj.object_id = object_id;
     obj.type      = type;
