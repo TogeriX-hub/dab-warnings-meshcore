@@ -1483,16 +1483,14 @@ void WebRadioInterface::handle_phs()
         for (auto& s : serviceList) {
             auto scs = rx->getComponents(s);
 
-            if (find(
-                        carousel_services_available.cbegin(),
-                        carousel_services_available.cend(),
-                        s.serviceId) == carousel_services_available.cend()) {
-                for (auto& sc : scs) {
-                    if (sc.transportMode() == TransportMode::Audio) {
-                        carousel_services_available.push_back(s.serviceId);
-                    }
-                }
-            }
+            // Data-only mode: do not add audio services to the carousel.
+            // We only need FIC/FIB parsing, ASA and Journaline/packet-mode.
+            // FAAD2 and lame are never invoked, which saves significant CPU
+            // on embedded hardware (Pi 3B+) and eliminates the audio-buffer
+            // deadlock risk entirely.
+            // phs entries are still created below so that DLS/MOT metadata
+            // and audio levels remain available in mux.json.
+            (void)scs; // suppress unused warning in data-only mode
 
             if (phs.count(s.serviceId) == 0) {
                 WebProgrammeHandler ph(s.serviceId, decode_settings.outputCodec);
