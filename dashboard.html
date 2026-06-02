@@ -277,7 +277,7 @@
     </div>
 
     <div class="panel" id="panel-sim">
-      <div class="panel-title">Simulator / Mesh-Output</div>
+      <div class="panel-title" id="panel-sim-title">Simulator / Mesh-Output</div>
       <div class="sim-output" id="sim-output">
         <div class="sim-msg" data-placeholder style="color:var(--muted);font-size:10px;padding:6px 0">Warte auf Verbindung...</div>
       </div>
@@ -669,16 +669,20 @@ function appendSimMsg(m) {
 function updateSimUI() {
   const badge=document.getElementById('sim-badge'), note=document.getElementById('sim-note');
   const input=document.getElementById('sim-input'), btnSend=document.getElementById('btn-send');
+  const panelTitle=document.getElementById('panel-sim-title');
   if (isSimulator) {
     badge.classList.add('active');
     note.textContent='/details · /warnings Böblingen · /status · /help';
     input.disabled=false; input.classList.add('active'); btnSend.disabled=false;
     document.getElementById('btn-clear').style.display='block';
+    if(panelTitle) panelTitle.textContent='Simulator / Mesh-Output';
   } else {
     badge.classList.remove('active');
-    note.textContent='Produktivmodus – Nachrichten gehen ins Mesh';
+    // Output bleibt sichtbar – gesendete Mesh-Nachrichten werden hier gespiegelt
+    note.textContent='Produktivmodus – gesendete Mesh-Nachrichten werden hier angezeigt';
     input.disabled=true; input.classList.remove('active'); btnSend.disabled=true;
     document.getElementById('btn-clear').style.display='none';
+    if(panelTitle) panelTitle.textContent='Mesh-Output';
   }
 }
 function sendBotCommand() {

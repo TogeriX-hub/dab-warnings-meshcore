@@ -3,6 +3,8 @@ mesh_sender.py – WarnBridge
 Sendet Warnmeldungen ins MeshCore-Mesh via TCP.
 Im Simulator-Modus (config.yaml: meshcore.simulator: true):
   → Nachrichten werden per WebSocket ans Dashboard gesendet statt ans Mesh.
+Im Produktivmodus:
+  → Nachrichten gehen ans Mesh UND werden per WebSocket ans Dashboard gespiegelt.
 """
 
 import asyncio
@@ -141,6 +143,7 @@ class MeshSender:
                 await self._ws_broadcast({"event": "simulator_out", "data": entry})
             return True
 
+        # Produktivmodus
         if not self._connected or self._mc is None:
             logger.warning("MeshCore nicht verbunden – versuche Reconnect")
             await self.connect()
@@ -153,6 +156,9 @@ class MeshSender:
             if len(self._sent_log) > 100:
                 self._sent_log.pop(0)
             logger.info("[MESH OUT] %s", text)
+            # Im Produktivmodus ans Dashboard spiegeln damit der Output sichtbar bleibt
+            if self._ws_broadcast:
+                await self._ws_broadcast({"event": "simulator_out", "data": entry})
             return True
         except Exception as e:
             logger.error("MeshCore send Fehler: %s", e)

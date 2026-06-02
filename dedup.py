@@ -133,6 +133,13 @@ class DedupCache:
         conn = self._get_conn()
         n_ids = conn.execute("SELECT COUNT(*) FROM seen_ids").fetchone()[0]
         n_hashes = conn.execute("SELECT COUNT(*) FROM seen_hashes").fetchone()[0]
+        # Abgelaufene Einträge aus dem Fenster entfernen bevor gezählt wird –
+        # sonst zeigt der Counter veraltete Werte wenn is_rate_limited() nicht
+        # aufgerufen wurde (z.B. weil neue Warnungen ausgeblieben sind).
+        now = _now()
+        hour_ago = now - timedelta(hours=1)
+        while self._hour_window and self._hour_window[0] < hour_ago:
+            self._hour_window.popleft()
         hour_count = len(self._hour_window)
         return {
             "cached_ids": n_ids,
