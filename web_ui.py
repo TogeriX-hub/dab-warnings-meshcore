@@ -308,7 +308,13 @@ class WebUI:
 
         # 3. Bekannte Build-Pfade
         known = [
+            # Mac (Entwicklung)
             Path.home() / "DAB Warnings" / "welle.io" / "build" / "welle-cli",
+            # Pi – Repo im Home-Verzeichnis (pi oder warnbridge user)
+            Path("/home/pi/dab-warnings-meshcore/welle.io/build/welle-cli"),
+            Path("/home/warnbridge/dab-warnings-meshcore/welle.io/build/welle-cli"),
+            Path.home() / "dab-warnings-meshcore" / "welle.io" / "build" / "welle-cli",
+            # Systemweit installiert
             Path("/usr/local/bin/welle-cli"),
             Path("/usr/bin/welle-cli"),
             Path("/opt/welle-cli/welle-cli"),
