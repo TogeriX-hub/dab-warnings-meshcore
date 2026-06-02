@@ -134,11 +134,15 @@ class WebUI:
         self.app.nina.poll_interval = int(nina_cfg.get("poll_interval_minutes", 15)) * 60
         self.app.nina._sources = nina_cfg.get("sources", {})
 
-        # MeshSender: simulator + channel_idx + scope aktualisieren
+        # MeshSender: über update_config aktualisieren (setzt auch scope wenn nötig)
         was_simulator = self.app.mesh.simulator
-        self.app.mesh.simulator = mc_cfg.get("simulator", True)
-        self.app.mesh.channel_idx = int(mc_cfg.get("channel_idx", 0))
-        self.app.mesh.scope = mc_cfg.get("scope", "*")
+        await self.app.mesh.update_config(
+            host=mc_cfg.get("host", "192.168.4.1"),
+            port=int(mc_cfg.get("port", 4403)),
+            channel_idx=int(mc_cfg.get("channel_idx", 0)),
+            scope=mc_cfg.get("scope", "*"),
+            simulator=mc_cfg.get("simulator", True),
+        )
 
         # Simulator wurde deaktiviert → echten Connect versuchen
         # Simulator wurde aktiviert → als verbunden markieren (kein echter Connect nötig)

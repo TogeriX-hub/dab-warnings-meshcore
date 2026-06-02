@@ -9,3 +9,4 @@ warnbridge.db
 __pycache__/dedup.cpython-313.pyc
 /__pycache__
 *.pyc
+*.pyc

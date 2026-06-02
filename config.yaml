@@ -13,10 +13,10 @@ meshcore:
   host: 192.168.4.1
   port: 4403
   scope: '*'
-  simulator: false
+  simulator: true
 nina:
   broadcast_districts:
-  - 08311
+  - 08111
   poll_interval_minutes: 15
   region_state: 08
   sources:
@@ -25,10 +25,10 @@ nina:
       events:
         dauerregen:
           enabled: true
-          min_level: 1
+          min_level: 2
         gewitter:
           enabled: true
-          min_level: 1
+          min_level: 2
         glaette_frost:
           enabled: false
           min_level: 3
@@ -46,7 +46,7 @@ nina:
           min_level: 2
         starkregen:
           enabled: true
-          min_level: 1
+          min_level: 3
         sturm_orkan:
           enabled: true
           min_level: 2

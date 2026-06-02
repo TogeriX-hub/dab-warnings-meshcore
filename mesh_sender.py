@@ -109,13 +109,40 @@ class MeshSender:
             return
 
         try:
-            self._mc = MeshCore()
-            await self._mc.connect_tcp(self.host, self.port)
+            self._mc = await MeshCore.create_tcp(self.host, self.port)
             self._connected = True
             logger.info("MeshCore verbunden: %s:%d", self.host, self.port)
+            # Flood-Scope einmalig nach Connect setzen
+            await self._set_scope()
         except Exception as e:
             self._connected = False
             logger.error("MeshCore Verbindung fehlgeschlagen: %s", e)
+
+    async def _set_scope(self):
+        """Flood-Scope auf dem Gerät setzen. * = ganzes Mesh, #Region = regional."""
+        if self._mc is None:
+            return
+        try:
+            await self._mc.commands.set_flood_scope(self.scope)
+            logger.info("MeshCore Flood-Scope gesetzt: %s", self.scope)
+        except Exception as e:
+            logger.warning("MeshCore set_flood_scope fehlgeschlagen: %s", e)
+
+    async def update_config(self, host: str, port: int, channel_idx: int,
+                            scope: str, simulator: bool):
+        """
+        Wird bei Config-Reload aus dem Dashboard aufgerufen.
+        Aktualisiert Einstellungen live; wenn scope sich geändert hat → neu setzen.
+        """
+        scope_changed = scope != self.scope
+        self.host = host
+        self.port = port
+        self.channel_idx = channel_idx
+        self.scope = scope
+        self.simulator = simulator
+
+        if not simulator and self._connected and scope_changed:
+            await self._set_scope()
 
     async def send_warning(self, w) -> bool:
         msg = format_alert_message(w)
@@ -151,7 +178,7 @@ class MeshSender:
                 return False
 
         try:
-            await self._mc.commands.send_msg(None, text, channel_idx=self.channel_idx)
+            await self._mc.commands.send_chan_msg(self.channel_idx, text)
             self._sent_log.append(entry)
             if len(self._sent_log) > 100:
                 self._sent_log.pop(0)

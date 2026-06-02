@@ -143,21 +143,50 @@ class WarnBridge:
 
         if should_broadcast:
             w_send = self._prepare_for_broadcast(w)
-            # Broadcast-Dedup: gleiche Warnung für gleichen Kreis nur 1x senden
-            # Hash aus headline + Minute + area_desc (= konfigurierter Kreis)
-            # Hash auf Stunde (nicht Minute) – alle Gewitter-Warnungen innerhalb
-            # einer Stunde für denselben Broadcast-Kreis = eine Nachricht
-            sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
-            broadcast_hash = f"{w.headline.lower()}|{sent_hour}|{w_send.area_desc}"
+
+            # msgType-Filter: Cancel und Update nie ins Mesh (nur in DB)
+            # Future (Vorabinfo) ebenfalls blockieren
+            msg_type = (w.msg_type or "Alert").strip().lower()
+            urgency = (w.urgency or "Immediate").strip().lower()
+            if msg_type == "cancel":
+                logger.info("📦 Cancel-Meldung gespeichert (kein Broadcast): %s", w.headline)
+                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
+                    await self.web_ui.broadcast_warning(w, False)
+                return
+            if urgency == "future":
+                logger.info("📦 Vorabinfo gespeichert (kein Broadcast): %s", w.headline)
+                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
+                    await self.web_ui.broadcast_warning(w, False)
+                return
+            if msg_type == "update":
+                logger.info("📦 Update-Meldung gespeichert (kein Broadcast): %s", w.headline)
+                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
+                    await self.web_ui.broadcast_warning(w, False)
+                return
+
+            # Broadcast-Dedup für DWD Stufe 1+2:
+            # Pro Event-Typ + Stunde + Kreis nur 1 Nachricht, egal wie viele Zellen.
+            # Stufe 3+ (Severe/Extreme) immer senden – echtes Unwetter soll immer durch.
             import hashlib as _hl
-            b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
-            if self.is_broadcast_duplicate(b_hash):
-                logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
-                             w.headline, w_send.area_desc)
-            elif self.dedup.is_rate_limited():
+            dwd_high_priority = (
+                w.source == "dwd" and (w.dwd_level or 1) >= 3
+            )
+            if not dwd_high_priority:
+                sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
+                event_key = w.dwd_event_type or w.headline.lower()
+                broadcast_hash = f"{event_key}|{sent_hour}|{w_send.area_desc}"
+                b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
+                if self.is_broadcast_duplicate(b_hash):
+                    logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
+                                 w.headline, w_send.area_desc)
+                    if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
+                        await self.web_ui.broadcast_warning(w, False)
+                    return
+                self.mark_broadcast_seen(b_hash)
+
+            if self.dedup.is_rate_limited():
                 logger.warning("Rate-Limit – Warnung nicht gesendet: %s", w.headline)
             else:
-                self.mark_broadcast_seen(b_hash)
                 logger.info("🚨 WARNUNG [%s] %s → Mesh | Gebiet: %s",
                             w.source.upper(), w.headline, w_send.area_desc)
                 success = await self.mesh.send_warning(w_send)
@@ -312,6 +341,12 @@ class WarnBridge:
                 continue
 
             if not self._passes_broadcast_filters(w):
+                continue
+
+            # Cancel, Update und Vorabinfo nie nachsenden
+            if (w.msg_type or "").strip().lower() in ("cancel", "update"):
+                continue
+            if (w.urgency or "").strip().lower() == "future":
                 continue
 
             if self.dedup.is_rate_limited():

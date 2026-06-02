@@ -481,17 +481,17 @@ let ws = null, isSimulator = false, retryDelay = 2000;
 let cfg = {}, allDistricts = [], selectedDistricts = [];
 
 const DWD_EVENTS = [
-  { key:'gewitter',           label:'Gewitter',         levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'sturm_orkan',        label:'Sturm / Orkan',    levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'starkregen',         label:'Starkregen',       levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'dauerregen',         label:'Dauerregen',       levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'hochwasser',         label:'Hochwasser',       levels:['Stufe 1','Stufe 2','Stufe 3','Stufe 4'] },
-  { key:'schnee_schneesturm', label:'Schnee / Sturm',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'glaette_frost',      label:'Glätte / Frost',   levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'tauwetter',          label:'Tauwetter',        levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'hitze',              label:'Hitze',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'nebel',              label:'Nebel',            levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
-  { key:'uv',                 label:'UV-Index',         levels:['Vorabinfo','Stark','Sehr stark','Extrem'] },
+  { key:'gewitter',           label:'Gewitter',         levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'sturm_orkan',        label:'Sturm / Orkan',    levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'starkregen',         label:'Starkregen',       levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'dauerregen',         label:'Dauerregen',       levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'hochwasser',         label:'Hochwasser',       levels:['🟡 Stufe 1','🟠 Stufe 2','🔴 Stufe 3','🟣 Stufe 4'] },
+  { key:'schnee_schneesturm', label:'Schnee / Sturm',   levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'glaette_frost',      label:'Glätte / Frost',   levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'tauwetter',          label:'Tauwetter',        levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'hitze',              label:'Hitze',            levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'nebel',              label:'Nebel',            levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'uv',                 label:'UV-Index',         levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
 ];
 
 // ── Tabs ──────────────────────────────────────────────────────────────
