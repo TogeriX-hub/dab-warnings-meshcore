@@ -4,4 +4,5 @@
 aiohttp>=3.9.0        # Web-Server + HTTP-Client (NINA API)
 pyyaml>=6.0           # config.yaml lesen
 meshcore>=0.1.0       # MeshCore TCP/BLE/Serial Client
+sdnotify>=0.3.2       # systemd Watchdog Heartbeat (Pi-Betrieb)
 # aiosqlite nicht nötig – wir nutzen sqlite3 synchron (thread-safe genug für unsere Last)

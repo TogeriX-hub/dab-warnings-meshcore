@@ -365,6 +365,7 @@ class WebUI:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            self._welle_manually_stopped = False  # Watchdog darf wieder eingreifen
             logger.info("welle-cli gestartet: %s (PID %d)", " ".join(cmd), self._welle_proc.pid)
             return web.json_response({"ok": True, "pid": self._welle_proc.pid, "channel": channel})
         except Exception as e:
@@ -383,7 +384,8 @@ class WebUI:
             except subprocess.TimeoutExpired:
                 proc.kill()
             self._welle_proc = None
-            logger.info("welle-cli beendet")
+            self._welle_manually_stopped = True  # Watchdog soll nicht neu starten
+            logger.info("welle-cli beendet (manuell)")
             return web.json_response({"ok": True})
         except Exception as e:
             return web.json_response({"ok": False, "error": str(e)}, status=500)

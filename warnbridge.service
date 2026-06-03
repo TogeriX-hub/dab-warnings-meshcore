@@ -1,0 +1,32 @@
+[Unit]
+Description=WarnBridge – DAB+ Notfallwarnungen ins MeshCore-Mesh
+After=network-online.target dnsmasq.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/dab-warnings-meshcore
+ExecStart=/usr/bin/python3 /home/pi/dab-warnings-meshcore/warnbridge.py
+
+# Logs in journald (abrufbar mit: journalctl -u warnbridge -f)
+StandardOutput=journal
+StandardError=journal
+
+# Neustart bei Absturz – immer, ausser bei sauberem Exit (z.B. systemctl stop)
+Restart=on-failure
+RestartSec=10s
+
+# Gibt systemd auf wenn WarnBridge in 5 Minuten mehr als 5x crasht
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# systemd Hardware-Watchdog: wenn WarnBridge 60s nicht mehr antwortet → Neustart
+# Erfordert sd_notify Heartbeat aus dem Python-Code (siehe unten)
+WatchdogSec=60s
+
+# Umgebungsvariablen
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -143,50 +143,21 @@ class WarnBridge:
 
         if should_broadcast:
             w_send = self._prepare_for_broadcast(w)
-
-            # msgType-Filter: Cancel und Update nie ins Mesh (nur in DB)
-            # Future (Vorabinfo) ebenfalls blockieren
-            msg_type = (w.msg_type or "Alert").strip().lower()
-            urgency = (w.urgency or "Immediate").strip().lower()
-            if msg_type == "cancel":
-                logger.info("📦 Cancel-Meldung gespeichert (kein Broadcast): %s", w.headline)
-                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
-                    await self.web_ui.broadcast_warning(w, False)
-                return
-            if urgency == "future":
-                logger.info("📦 Vorabinfo gespeichert (kein Broadcast): %s", w.headline)
-                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
-                    await self.web_ui.broadcast_warning(w, False)
-                return
-            if msg_type == "update":
-                logger.info("📦 Update-Meldung gespeichert (kein Broadcast): %s", w.headline)
-                if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
-                    await self.web_ui.broadcast_warning(w, False)
-                return
-
-            # Broadcast-Dedup für DWD Stufe 1+2:
-            # Pro Event-Typ + Stunde + Kreis nur 1 Nachricht, egal wie viele Zellen.
-            # Stufe 3+ (Severe/Extreme) immer senden – echtes Unwetter soll immer durch.
+            # Broadcast-Dedup: gleiche Warnung für gleichen Kreis nur 1x senden
+            # Hash aus headline + Minute + area_desc (= konfigurierter Kreis)
+            # Hash auf Stunde (nicht Minute) – alle Gewitter-Warnungen innerhalb
+            # einer Stunde für denselben Broadcast-Kreis = eine Nachricht
+            sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
+            broadcast_hash = f"{w.headline.lower()}|{sent_hour}|{w_send.area_desc}"
             import hashlib as _hl
-            dwd_high_priority = (
-                w.source == "dwd" and (w.dwd_level or 1) >= 3
-            )
-            if not dwd_high_priority:
-                sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
-                event_key = w.dwd_event_type or w.headline.lower()
-                broadcast_hash = f"{event_key}|{sent_hour}|{w_send.area_desc}"
-                b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
-                if self.is_broadcast_duplicate(b_hash):
-                    logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
-                                 w.headline, w_send.area_desc)
-                    if self.web_ui and hasattr(self.web_ui, 'broadcast_warning'):
-                        await self.web_ui.broadcast_warning(w, False)
-                    return
-                self.mark_broadcast_seen(b_hash)
-
-            if self.dedup.is_rate_limited():
+            b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
+            if self.is_broadcast_duplicate(b_hash):
+                logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
+                             w.headline, w_send.area_desc)
+            elif self.dedup.is_rate_limited():
                 logger.warning("Rate-Limit – Warnung nicht gesendet: %s", w.headline)
             else:
+                self.mark_broadcast_seen(b_hash)
                 logger.info("🚨 WARNUNG [%s] %s → Mesh | Gebiet: %s",
                             w.source.upper(), w.headline, w_send.area_desc)
                 success = await self.mesh.send_warning(w_send)
@@ -343,12 +314,6 @@ class WarnBridge:
             if not self._passes_broadcast_filters(w):
                 continue
 
-            # Cancel, Update und Vorabinfo nie nachsenden
-            if (w.msg_type or "").strip().lower() in ("cancel", "update"):
-                continue
-            if (w.urgency or "").strip().lower() == "future":
-                continue
-
             if self.dedup.is_rate_limited():
                 logger.warning("Rate-Limit beim Nachsenden – abgebrochen nach %d Warnungen", sent_count)
                 break
@@ -371,6 +336,45 @@ class WarnBridge:
                 await asyncio.sleep(delay)  # Rate-Limiting: 1s Simulator, 10s Mesh
 
         logger.info("Broadcasting-Start: %d Warnungen nachgesendet.", sent_count)
+
+    async def _systemd_watchdog_loop(self):
+        """
+        Sendet alle 20s einen Heartbeat an systemd (WatchdogSec=60s im Service).
+        Wenn WarnBridge einfriert und dieser Loop nicht mehr läuft,
+        startet systemd den Prozess nach 60s automatisch neu.
+        Funktioniert nur auf dem Pi (systemd) – auf dem Mac still ignoriert.
+        """
+        try:
+            import sdnotify
+            n = sdnotify.SystemdNotifier()
+            n.notify("READY=1")
+            logger.info("systemd watchdog aktiv")
+        except ImportError:
+            # sdnotify nicht installiert (Mac) – einfach via Umgebungsvariable prüfen
+            import os
+            if not os.environ.get("WATCHDOG_USEC"):
+                logger.debug("systemd watchdog nicht aktiv (kein systemd)")
+                return
+            # Manueller notify ohne Library
+            watchdog_socket = os.environ.get("NOTIFY_SOCKET")
+            if not watchdog_socket:
+                return
+            import socket
+            n = None
+        
+        while True:
+            await asyncio.sleep(20)
+            try:
+                import sdnotify
+                sdnotify.SystemdNotifier().notify("WATCHDOG=1")
+            except Exception:
+                # Fallback ohne sdnotify
+                import os, socket
+                notify_socket = os.environ.get("NOTIFY_SOCKET")
+                if notify_socket:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+                        s.connect(notify_socket)
+                        s.sendall(b"WATCHDOG=1")
 
     async def start(self):
         logger.info("WarnBridge startet...")
@@ -399,6 +403,9 @@ class WarnBridge:
 
         # welle-cli Watchdog
         self._tasks.append(asyncio.create_task(self._welle_watchdog_loop(), name="welle_watchdog"))
+
+        # systemd Watchdog Heartbeat
+        self._tasks.append(asyncio.create_task(self._systemd_watchdog_loop(), name="systemd_watchdog"))
 
         logger.info("WarnBridge läuft. Simulator: %s",
                     self.cfg.get("meshcore", {}).get("simulator", True))
@@ -457,6 +464,12 @@ class WarnBridge:
                 continue
 
             if not self.dab.watchdog_triggered:
+                continue
+
+            # Nicht neu starten wenn User manuell gestoppt hat
+            if self.web_ui and getattr(self.web_ui, '_welle_manually_stopped', False):
+                logger.debug("welle-cli Watchdog: manuell gestoppt – kein Neustart")
+                self.dab.reset_watchdog()
                 continue
 
             # Cooldown prüfen – verhindert Restart-Schleife

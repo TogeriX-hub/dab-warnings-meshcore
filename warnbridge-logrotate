@@ -1,0 +1,8 @@
+/home/pi/dab-warnings-meshcore/warnbridge_log.txt {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
