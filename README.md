@@ -1,140 +1,78 @@
 # WarnBridge
 
-DAB+ Notfallwarnungen offline empfangen und ins MeshCore-LoRa-Netz einspeisen.
+**DAB+ Katastrophenwarnungen offline empfangen und ins MeshCore-LoRa-Netz einspeisen.**
 
-WarnBridge ist ein Python-basiertes System, das offizielle Katastrophenwarnungen aus zwei Quellen verarbeitet:
-
-- **DAB+ (ASA/EWF/Journaline)** – vollständig offline, primärer Kanal  
-- **NINA API (BBK)** – sekundärer Online-Kanal  
-
-Die Warnungen werden vereinheitlicht, dedupliziert und anschließend als kompakte Nachrichten in ein MeshCore LoRa Mesh-Netzwerk übertragen.
+WarnBridge empfängt offizielle Warnmeldungen über DAB+ (ASA/Journaline) – vollständig ohne Internet – und leitet sie als kompakte Nachrichten in ein MeshCore-LoRa-Mesh-Netzwerk weiter. Als Fallback dient die NINA API des BBK. Das System läuft autonom auf einem Raspberry Pi und überlebt Strom- und Internetausfall.
 
 ---
 
-## Ziel des Projekts
+## Wie es funktioniert
 
-WarnBridge soll sicherstellen, dass Warnmeldungen auch unter schwierigen Bedingungen (z. B. Stromausfall, Mobilfunküberlastung oder Internetausfall) verfügbar bleiben.
+![Architektur](docs/screenshots/architektur.svg)
 
-- DAB+ dient als resiliente, unabhängige Quelle  
-- LoRa Mesh ermöglicht die lokale Weiterverteilung ohne Infrastruktur  
+Zwei Eingangswege speisen eine gemeinsame Verarbeitungspipeline:
 
----
+- **DAB+** – RTL-SDR-Dongle + welle-cli dekodieren das Signal. ASA-Alerts (FIG 0/15) und Journaline-Texte werden ausgewertet, regional gefiltert und weitergeleitet.
+- **NINA API** – MoWaS- und DWD-Meldungen werden alle 15 Minuten abgerufen und nach Bundesland + Kreisen gefiltert.
 
-## Funktionsübersicht
-
-- Empfang von DAB+ Multiplexen über RTL-SDR  
-- Auswertung von ASA (Automatic Safety Alert) inkl. Geocode-Filter (ETSI TS 104 089)  
-- Journaline-Dekodierung für Warntexte (Fraunhofer NML Decoder)  
-- NINA API Integration (MoWaS + DWD)  
-- CAP-Normalisierung (einheitliche Datenstruktur)  
-- Deduplizierung (ID + Inhalts-Hash)  
-- Speicherung in SQLite (48h)  
-- Versand ins MeshCore-Netz inkl. RegionScope Einstellung  
-
-### Bot-Befehle
-
-- `/details`  
-- `/warnings <Ort>`  
-- `/status`  
-- `/help`
-
-- Web-Dashboard mit Simulator (für Entwicklung & Konfiguration)
+Beide Quellen landen im selben CAP-Normalizer, werden dedupliziert (ID + Inhalts-Hash) und in SQLite gespeichert. Ausgewählte Warnungen werden per TCP an den Heltec LoRa-Node gesendet und von dort ins Mesh geflutet.
 
 ---
 
-## Voraussetzungen
+## Dashboard
 
-### Hardware (empfohlen)
+| Monitor | Konfiguration |
+|---|---|
+| ![Monitor](docs/screenshots/dashboard-monitor.png) | ![Konfiguration](docs/screenshots/dashboard-konfiguration.png) |
 
-- Raspberry Pi 3B+ (oder vergleichbar)  
-- RTL-SDR (z. B. Nooelec NESDR SMArt v5)  
-- DAB+ Antenne  
-- Heltec WiFi LoRa 32 v3 (für MeshCore)  
-
-### Software
-
-- macOS mit Homebrew **oder** Raspberry Pi OS  
-- Python 3.9+  
-- welle-cli (angepasste Version, bereits im Repo enthalten)
+Das Web-Dashboard ist erreichbar unter `http://warnbridge.local:8080` (Pi) oder `http://localhost:8080` (Mac-Entwicklung). Es zeigt Systemstatus, aktive Warnungen, Mesh-Output und ermöglicht die komplette Konfiguration ohne Neustart.
 
 ---
 
-## Installation (macOS)
+## Funktionen
 
-### 1. Homebrew installieren (falls noch nicht vorhanden)
+- Empfang von DAB+ über RTL-SDR (174–240 MHz)
+- ASA-Dekodierung nach ETSI TS 104 089 (FIG 0/15: Heartbeat, Trigger, Sustain, End)
+- Geocode-Filter: nur Alerts die den konfigurierten Standort betreffen
+- Journaline-Dekodierung für Warntexte (Fraunhofer NML Decoder, zlib-komprimiert)
+- NINA API: MoWaS (alle Schweregrade konfigurierbar) + DWD (pro Ereignistyp + Stufe)
+- CAP-Normalisierung, Deduplizierung, SQLite-Speicherung (48h)
+- MeshCore-Integration per TCP, konfigurierbarer Channel + Scope
+- Bot-Befehle im Mesh: `/details`, `/warnings <Ort>`, `/status`, `/help`
+- Web-Dashboard mit Live-Updates, Konfiguration ohne Neustart, Testwarnung-Funktion
+- systemd-Service mit Watchdog-Heartbeat und automatischem welle-cli-Neustart
+- Entwicklung ohne Hardware möglich (Simulator-Modus)
 
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
+---
 
-### 2. Repository klonen
+## Hardware
+
+| Komponente | Modell | Funktion |
+|---|---|---|
+| Raspberry Pi 4 | 2 GB RAM | Hauptrechner |
+| RTL-SDR | Nooelec NESDR SMArt v5 | DAB+-Empfang (174–240 MHz) |
+| DAB+-Antenne | Im Bundle | Signal empfangen |
+| MeshCore-Node | Heltec WiFi LoRa 32 v3 | TCP-Schnittstelle, LoRa 868 MHz |
+| microSD | 32 GB A1/Class 10 | Betriebssystem + DB |
+
+---
+
+## Schnellstart
+
+### macOS (Entwicklung)
 
 ```bash
 git clone https://github.com/TogeriX-hub/dab-warnings-meshcore
 cd dab-warnings-meshcore
-```
-
-### 3. Installation mit einem Befehl
-
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-Das Skript installiert automatisch alle Abhängigkeiten, kompiliert welle-cli und richtet die Python-Umgebung ein.
-
----
-
-## Starten
-
-```bash
+bash install.sh
 python3 warnbridge.py
 ```
 
-welle-cli wird automatisch von WarnBridge gestartet. Der Pfad ist in `config.yaml` vorgegeben:
+Dashboard: [http://localhost:8080](http://localhost:8080)
 
-```yaml
-dab:
-  welle_cli_path: ./welle.io/build/welle-cli
-```
+### Raspberry Pi
 
----
-
-## Geocode-Filter (ASA)
-
-WarnBridge filtert ASA-Alerts geografisch nach ETSI TS 104 089 Annex A/F.  
-Der Standort-Code wird in `config.yaml` als Präsentationsformat eingegeben:
-
-```yaml
-dab:
-  asa_geocode: 1257-1533-2371  # Beispiel: Sindelfingen
-```
-
-Der Code kann über die offizielle DAB-Lokalisierungsseite ermittelt werden.  
-Auf 5C läuft dauerhaft ein Testalert mit dem Paris-Code `1253-3513-3668` – korrekt konfigurierte Geräte ignorieren diesen.
-
----
-
-## Wichtiger Hinweis zu welle.io
-
-Dieses Projekt enthält eine angepasste Version von welle.io direkt im Repository (`welle.io/`). Der Fork enthält folgende Erweiterungen gegenüber dem Original:
-
-- ASA-Erkennung über FIG 0/15 (ETSI TS 104 089) mit korrektem Location Code Parser  
-- ASA Holdover: `active=true` bleibt 10s nach Alert-Ende (für zuverlässiges Polling)  
-- Packet-Mode Subchannel Decoder  
-- Fraunhofer NML Journaline Decoder (zlib-komprimierte JML-Objekte)  
-- `/journaline.json` und `/rxlog.json` HTTP-Endpunkte  
-
-Original: https://github.com/AlbrechtL/welle.io  
-Unser Fork: https://github.com/TogeriX-hub/welle.io  
-
----
-
-## Entwicklung (Mac-first)
-
-- MeshCore Simulator aktiv über `config.yaml` (`meshcore.simulator: true`)
-- Dashboard unter: http://localhost:8080  
-- Keine Hardware für Entwicklung nötig  
+→ [docs/installation-pi.md](docs/installation-pi.md)
 
 ---
 
@@ -142,22 +80,41 @@ Unser Fork: https://github.com/TogeriX-hub/welle.io
 
 | Komponente | Status |
 |---|---|
-| DAB+ Empfang | ✅ OK |
-| ASA-Erkennung | ✅ OK |
-| ASA Geocode-Filter | ✅ OK (ETSI TS 104 089) |
-| Journaline-Decoder | ✅ OK (getestet auf DLF 5C) |
-| NINA Integration (MoWaS + DWD) | ✅ OK |
-| MeshCore Integration | ✅ OK |
-| Web-Dashboard | ✅ OK |
-| Raspberry Pi Setup | 🔜 Ausstehend |
+| DAB+-Empfang (RTL-SDR + welle-cli) | ✅ |
+| ASA-Dekodierung (FIG 0/15) | ✅ |
+| ASA Geocode-Filter (ETSI TS 104 089) | ✅ |
+| Journaline-Decoder (Fraunhofer NML) | ✅ getestet auf DLF 5C |
+| NINA Integration (MoWaS + DWD) | ✅ |
+| MeshCore TCP-Integration | ✅ |
+| Web-Dashboard | ✅ |
+| systemd-Service + Watchdog | ✅ |
+| Raspberry Pi Betrieb | ✅ läuft seit Juni 2026 |
 | Warntag-Livetest | 🗓 10.09.2026 |
 
 ---
 
-## Offene Punkte (Phase 4+)
+## Hinweis zu welle.io
 
-- Journaline-Zuweisung zu ASA-Events verbessern  
-- Umlaut-Fix in welle.io (`webprogrammehandler.cpp`, UTF-8/Latin-1)  
-- `journalineSId` deterministisch auf den Service mit validem Subchannel setzen  
-- Welle.io Prozesse für Dauerbetrieb stabilisieren (systemd, Watchdog)  
-- Raspberry Pi Setup  
+Das Projekt enthält eine angepasste Version von [welle.io](https://github.com/AlbrechtL/welle.io) direkt im Repository (`welle.io/`). Der Fork ergänzt das Original um:
+
+- ASA-Dekodierung über FIG 0/15 (ETSI TS 104 089)
+- ASA Holdover: `active=true` bleibt 10s nach Alert-Ende
+- Packet-Mode Subchannel Decoder
+- Fraunhofer NML Journaline Decoder (zlib-komprimierte JML-Objekte)
+- HTTP-Endpunkte `/journaline.json` und `/rxlog.json`
+
+Fork: [github.com/TogeriX-hub/welle.io](https://github.com/TogeriX-hub/welle.io)
+
+---
+
+## Dokumentation
+
+- [Installation macOS](docs/installation-mac.md)
+- [Installation Raspberry Pi](docs/installation-pi.md)
+- [Konfiguration (config.yaml)](docs/konfiguration.md)
+
+---
+
+## Verwandte Projekte
+
+- [FieldMesh](https://github.com/TogeriX-hub/FieldMesh) – MeshCore-Firmware-Fork für Off-Grid-Einsatz
