@@ -98,10 +98,11 @@ class WarnBridge:
 
         self._tasks: list[asyncio.Task] = []
 
-        # Broadcasting-Schalter: standardmäßig AUS.
-        # Muss im Dashboard manuell aktiviert werden.
+        # Broadcasting-Schalter: wird aus config.yaml geladen (broadcasting.enabled).
         # Wird bei Config-Reload automatisch zurückgesetzt.
-        self.broadcasting_enabled: bool = False
+        self.broadcasting_enabled: bool = bool(
+            cfg.get("broadcasting", {}).get("enabled", False)
+        )
         # In-Memory Cache für Broadcast-Dedup (verhindert gleiche Warnung mehrfach senden)
         # Wird bei Config-Reload geleert damit neue Kreise frisch prüfen können
         self._broadcast_sent_hashes: set[str] = set()

@@ -159,9 +159,7 @@ class WebUI:
         # Sofort einen Poll auslösen damit neue Region direkt abgefragt wird
         asyncio.create_task(self.app.nina._poll())
 
-        # Broadcasting bei Config-Änderung zurücksetzen
-        self.app.broadcasting_enabled = False
-        logger.info("Konfig live neu geladen – Broadcasting zurückgesetzt (AUS) – sofortiger Poll gestartet")
+        logger.info("Konfig live neu geladen – sofortiger Poll gestartet")
 
     async def _api_sim_clear(self, request: web.Request) -> web.Response:
         """Simulator-Log und Test-Warnungen aus DB löschen (nur wenn simulator: true)."""
@@ -220,6 +218,15 @@ class WebUI:
             self.app.broadcasting_enabled = bool(data.get("enabled", False))
             state = "AN" if self.app.broadcasting_enabled else "AUS"
             logger.info("Broadcasting: %s", state)
+
+            # Status in config.yaml persistieren
+            if "broadcasting" not in self.config:
+                self.config["broadcasting"] = {}
+            self.config["broadcasting"]["enabled"] = self.app.broadcasting_enabled
+            import yaml
+            with open("config.yaml", "w", encoding="utf-8") as f:
+                yaml.dump(self.config, f, allow_unicode=True, default_flow_style=False)
+
             # Wenn gerade eingeschaltet: ausstehende Warnungen nachsenden
             if self.app.broadcasting_enabled and not was_enabled:
                 asyncio.create_task(self.app.on_broadcasting_enabled())
@@ -232,10 +239,7 @@ class WebUI:
         return web.json_response(self.app.dab.get_rxlog())
 
     async def _api_sim_trigger(self, request: web.Request) -> web.Response:
-        """Testwarnung auslösen (nur wenn simulator: true)."""
-        if not self.config.get("meshcore", {}).get("simulator", True):
-            return web.json_response({"ok": False, "error": "Nicht im Simulator-Modus"}, status=400)
-
+        """Testwarnung auslösen."""
         try:
             data = await request.json()
             warn_type = data.get("type", "nina")
