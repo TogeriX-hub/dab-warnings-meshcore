@@ -1,6 +1,6 @@
 # WarnBridge
 
-**DAB+ Katastrophenwarnungen offline empfangen und ins MeshCore-LoRa-Netz einspeisen.**
+![Titel](docs/screenshots/hero.png)
 
 WarnBridge empfängt offizielle Warnmeldungen über DAB+ (ASA/Journaline) – vollständig ohne Internet – und leitet sie als kompakte Nachrichten in ein MeshCore-LoRa-Mesh-Netzwerk weiter. Als Fallback dient die NINA API des BBK. Das System läuft autonom auf einem Raspberry Pi und überlebt Strom- und Internetausfall.
 
