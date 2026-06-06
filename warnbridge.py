@@ -22,6 +22,7 @@ from nina_poller import NinaPoller
 from mesh_sender import MeshSender
 from bot_handler import BotHandler
 from dab_listener import DabListener
+from space_weather_poller import SpaceWeatherPoller
 import ags_lookup
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ class WarnBridge:
         self.mesh = MeshSender(config.get("meshcore", {}))
         self.nina = NinaPoller(config.get("nina", {}), on_warning=self.handle_warning)
         self.dab = DabListener(config.get("dab", {}), on_warning=self.handle_warning)
+        self.sw_poller = SpaceWeatherPoller(config, on_warning=self.handle_warning)
         self.bot = BotHandler(self)
 
         # web_ui wird in Phase 4 hier eingebunden
@@ -101,7 +103,7 @@ class WarnBridge:
         # Broadcasting-Schalter: wird aus config.yaml geladen (broadcasting.enabled).
         # Wird bei Config-Reload automatisch zurückgesetzt.
         self.broadcasting_enabled: bool = bool(
-            cfg.get("broadcasting", {}).get("enabled", False)
+            self.cfg.get("broadcasting", {}).get("enabled", False)
         )
         # In-Memory Cache für Broadcast-Dedup (verhindert gleiche Warnung mehrfach senden)
         # Wird bei Config-Reload geleert damit neue Kreise frisch prüfen können
@@ -200,7 +202,8 @@ class WarnBridge:
 
         # Kreis-Check – nur für NINA (mowas/dwd/lhp)
         # DAB-Warnungen haben keinen AGS-Code, Geocode-Filter läuft bereits in dab_listener.py
-        if w.source == "dab":
+        # Space-Weather-Warnungen sind global – kein Kreis-Check
+        if w.source in ("dab", "space_weather"):
             return True
 
         if broadcast_districts:
@@ -396,6 +399,12 @@ class WarnBridge:
         # DAB-Listener starten
         self._tasks.append(asyncio.create_task(self.dab.run(), name="dab_listener"))
 
+        # Space-Weather-Poller starten
+        self._tasks.append(asyncio.create_task(self.sw_poller.run(), name="sw_poller"))
+
+        # MeshCore Listen-Loop starten (Bot-Befehle empfangen)
+        self.mesh.start_listen_loop(self.bot.handle)
+
         # Täglicher Cleanup
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
 
@@ -422,6 +431,7 @@ class WarnBridge:
             task.cancel()
         self.nina.stop()
         self.dab.stop()
+        self.sw_poller.stop()
 
     async def _cleanup_loop(self):
         """Täglich expired entries löschen."""
@@ -522,6 +532,7 @@ class WarnBridge:
             "dedup": self.dedup.stats(),
             "db": self.db.stats(),
             "dab": self.dab.status(),
+            "space_weather": self.sw_poller.status(),
             "welle_watchdog": {
                 "restart_count": self._welle_restart_count,
                 "last_restart": self._welle_last_restart.isoformat() if self._welle_last_restart else None,

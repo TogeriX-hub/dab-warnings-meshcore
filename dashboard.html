@@ -273,6 +273,7 @@
         <div class="stat-row"><span class="stat-label">Warnungen (48h)</span><span class="stat-value" id="st-warnings">–</span></div>
         <div class="stat-row"><span class="stat-label">Dedup Cache</span><span class="stat-value" id="st-dedup">–</span></div>
         <div class="stat-row"><span class="stat-label">Gesendet (1h)</span><span class="stat-value" id="st-sent">–</span></div>
+        <div class="stat-row"><span class="stat-label">Weltraumwetter</span><span class="stat-value dim" id="st-sw">–</span></div>
       </div>
     </div>
 
@@ -460,6 +461,21 @@
         <div class="config-body" id="dwd-toggles"></div>
       </div>
 
+      <div class="config-section">
+        <div class="config-section-title">&#9728;&#65039; Weltraumwetter (NOAA SWPC)</div>
+        <div class="config-body">
+          <div class="toggle-row" style="border:none;padding:4px 0">
+            <span class="toggle-label">Aktiviert</span>
+            <div class="toggle-right">
+              <input type="number" id="cfg-sw-poll" min="5" max="60" placeholder="15" style="width:44px" title="Poll-Intervall in Minuten">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">min</span>
+              <label class="switch"><input type="checkbox" id="cfg-sw-enabled" onchange="onSwEnabled()"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div id="sw-toggles"></div>
+        </div>
+      </div>
+
     </div>
 
     <div class="save-row">
@@ -617,6 +633,20 @@ function applyStatus(s) {
   setText('st-warnings',(s.db||{}).active_warnings??'–');
   setText('st-dedup',`${(s.dedup||{}).cached_ids||0} IDs`);
   setText('st-sent',`${(s.dedup||{}).sent_last_hour||0} / ${(s.dedup||{}).max_per_hour||5}`);
+  // Space-Weather Status
+  const sw = s.space_weather || {};
+  const swEl = document.getElementById('st-sw');
+  if (swEl) {
+    if (!sw.running) {
+      swEl.textContent = 'Inaktiv'; swEl.className = 'stat-value dim';
+    } else {
+      const g = sw.current_g || 0;
+      if (g >= 4) { swEl.textContent = `G${g} AKTIV`; swEl.className = 'stat-value err'; }
+      else if (g === 3) { swEl.textContent = `G${g} Aktiv`; swEl.className = 'stat-value warn'; }
+      else if (g > 0) { swEl.textContent = `G${g}`; swEl.className = 'stat-value dim'; }
+      else { swEl.textContent = 'G0 – ruhig'; swEl.className = 'stat-value ok'; }
+    }
+  }
   isSimulator=mesh.simulator; updateSimUI();
 }
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
@@ -821,6 +851,11 @@ function applyConfigToUI() {
   document.getElementById('cfg-lhp-en').checked=nina.sources?.lhp?.enabled??false;
   selectedDistricts=(nina.broadcast_districts||[]).map(String);
   renderDwdToggles();
+  // Space-Weather
+  const sw=cfg.space_weather||{};
+  if(document.getElementById('cfg-sw-enabled')) document.getElementById('cfg-sw-enabled').checked=sw.enabled??true;
+  if(document.getElementById('cfg-sw-poll')) document.getElementById('cfg-sw-poll').value=sw.poll_interval_minutes||15;
+  renderSwToggles();
 }
 
 function renderDwdToggles() {
@@ -844,6 +879,55 @@ function renderDwdToggles() {
 
 function onDwdToggle(key) {
   document.getElementById(`dwd-level-${key}`).disabled=!document.getElementById(`dwd-en-${key}`).checked;
+}
+
+// Space-Weather Toggles – gleiches Pattern wie DWD
+const SW_EVENTS = [
+  { key:'geo',   label:'Geomagnetisch (G)',   levels:['G3 Strong','G4 Severe','G5 Extreme'], startAt:3, watchKey:true },
+  { key:'rbl',   label:'X-Flares (R-Skala)',  levels:['R3 Strong','R4 Severe','R5 Extreme'], startAt:3, watchKey:false },
+  { key:'rad',   label:'Teilchensturm (S)',    levels:['S3 Strong','S4 Severe','S5 Extreme'], startAt:3, watchKey:false },
+];
+
+function renderSwToggles() {
+  const sw=cfg.space_weather||{};
+  const geo=sw.geomagnetic||{}, rbl=sw.radio_blackout||{}, rad=sw.solar_radiation||{};
+  const cfgMap = { geo, rbl, rad };
+  const container = document.getElementById('sw-toggles');
+  if (!container) return;
+  container.innerHTML = SW_EVENTS.map(ev => {
+    const ec = cfgMap[ev.key] || {};
+    const enabled = ec.enabled ?? (ev.key === 'geo');
+    const level = (ec.min_level ?? ev.startAt) - ev.startAt; // 0-based index
+    let extra = '';
+    if (ev.watchKey) {
+      const watchOn = geo.watch_enabled ?? true;
+      extra = `<label class="switch" title="Vorlaufwarnung (Watch)" style="margin-right:4px">
+        <input type="checkbox" id="cfg-sw-watch" ${watchOn?'checked':''}>
+        <span class="slider"></span>
+      </label><span style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-right:6px">Watch</span>`;
+    }
+    return `<div class="toggle-row">
+      <span class="toggle-label">${escHtml(ev.label)}</span>
+      <div class="toggle-right">
+        ${extra}
+        <select class="level-select" id="sw-level-${ev.key}" ${!enabled?'disabled':''}>
+          ${ev.levels.map((l,i)=>`<option value="${i+ev.startAt}"${(ec.min_level??ev.startAt)===(i+ev.startAt)?' selected':''}>${escHtml(l)}</option>`).join('')}
+        </select>
+        <label class="switch">
+          <input type="checkbox" id="sw-en-${ev.key}" ${enabled?'checked':''} onchange="onSwToggle('${ev.key}')">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onSwToggle(key) {
+  document.getElementById(`sw-level-${key}`).disabled = !document.getElementById(`sw-en-${key}`).checked;
+}
+
+function onSwEnabled() {
+  // Kein extra Verhalten nötig – Toggles bleiben wie sie sind
 }
 
 function checkFirstRun() {
@@ -887,6 +971,23 @@ async function saveConfig() {
         mowas:{enabled:document.getElementById('cfg-mowas-en').checked,min_severity:document.getElementById('cfg-mowas-sev').value},
         dwd:{enabled:true,events:dwdEvents},
         lhp:{enabled:document.getElementById('cfg-lhp-en').checked},
+      },
+    },
+    space_weather:{
+      enabled:document.getElementById('cfg-sw-enabled')?.checked??true,
+      poll_interval_minutes:parseInt(document.getElementById('cfg-sw-poll')?.value||'15'),
+      geomagnetic:{
+        enabled:document.getElementById('sw-en-geo')?.checked??true,
+        min_level:parseInt(document.getElementById('sw-level-geo')?.value||'3'),
+        watch_enabled:document.getElementById('cfg-sw-watch')?.checked??true,
+      },
+      solar_radiation:{
+        enabled:document.getElementById('sw-en-rad')?.checked??false,
+        min_level:parseInt(document.getElementById('sw-level-rad')?.value||'4'),
+      },
+      radio_blackout:{
+        enabled:document.getElementById('sw-en-rbl')?.checked??false,
+        min_level:parseInt(document.getElementById('sw-level-rbl')?.value||'4'),
       },
     },
   };

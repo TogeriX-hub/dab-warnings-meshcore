@@ -62,5 +62,18 @@ nina:
     mowas:
       enabled: true
       min_severity: Severe
+space_weather:
+  enabled: true
+  geomagnetic:
+    enabled: true
+    min_level: 4
+    watch_enabled: true
+  poll_interval_minutes: 15
+  radio_blackout:
+    enabled: true
+    min_level: 4
+  solar_radiation:
+    enabled: true
+    min_level: 4
 warnings_db:
   ttl_hours: 48

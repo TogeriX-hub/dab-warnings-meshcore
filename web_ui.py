@@ -107,7 +107,7 @@ class WebUI:
         """Konfiguration ändern, in config.yaml speichern und live neu laden."""
         try:
             data = await request.json()
-            allowed = {"meshcore", "dab", "nina", "dedup", "warnings_db"}
+            allowed = {"meshcore", "dab", "nina", "dedup", "warnings_db", "space_weather"}
             for key in data:
                 if key in allowed:
                     self.config[key] = data[key]
@@ -155,6 +155,10 @@ class WebUI:
 
         # warnbridge: broadcast_districts aktualisieren
         self.app.cfg = self.config
+
+        # SpaceWeatherPoller: Einstellungen live aktualisieren
+        if hasattr(self.app, "sw_poller"):
+            self.app.sw_poller.update_config(self.config)
 
         # Sofort einen Poll auslösen damit neue Region direkt abgefragt wird
         asyncio.create_task(self.app.nina._poll())

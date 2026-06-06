@@ -1,13 +1,7 @@
 """
 bot_handler.py – WarnBridge
 Verarbeitet Bot-Befehle aus dem MeshCore-Mesh (oder Dashboard-Simulator).
-Befehle: /details, /warnings [Ort], /status, /help
-
-Nachrichtenlogik:
-- /help    → 1 Nachricht
-- /status  → 1 Nachricht
-- /warnings → max 2 Nachrichten (Header + Liste)
-- /details → max 3 Nachrichten (Header + Gebiet + Beschreibung), alle mit Fallback-Kürzung
+Befehle: /details, /warnings [Ort], /status, /help, /swdetails
 """
 
 import asyncio
@@ -21,7 +15,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MSG_LIMIT = 120
-
 MSG_DELAY_SIMULATOR = 1.0
 MSG_DELAY_MESH = 10.0
 
@@ -29,17 +22,12 @@ SendFn = Callable[[str], Awaitable[bool]]
 
 
 def _trunc(text: str, max_len: int = MSG_LIMIT) -> str:
-    """Text auf max_len Zeichen kürzen, mit … wenn nötig."""
     if len(text) <= max_len:
         return text
     return text[:max_len - 1] + "…"
 
 
 def _area_short(area_desc: str, max_len: int = 60) -> str:
-    """
-    Gebietsbezeichnung kürzen.
-    Bei mehreren Kreisen: ersten + "u.a." statt alles aufzulisten.
-    """
     if not area_desc:
         return "–"
     parts = [p.strip() for p in area_desc.split(",")]
@@ -73,6 +61,8 @@ class BotHandler:
             await self._cmd_warnings(ort, send)
         elif lower == "/status":
             await self._cmd_status(send)
+        elif lower == "/swdetails":
+            await self._cmd_swdetails(send)
         elif lower == "/help":
             await self._cmd_help(send)
         else:
@@ -130,10 +120,7 @@ class BotHandler:
                 return
             label = "deine Region"
 
-        # Nachricht 1: Header
         header = _trunc(f"{len(warnings)} Warnung(en) fuer {label}:")
-
-        # Nachricht 2: kompakte Liste, alles in eine Nachricht
         lines = []
         for i, w in enumerate(warnings[:4], 1):
             sev = (w.get("severity") or "?")[:3].upper()
@@ -184,40 +171,91 @@ class BotHandler:
         await send(_trunc(msg))
 
     # ------------------------------------------------------------------
+    # /swdetails – Space Weather Details (1–2 Nachrichten)
+    # Ergänzt die Erstnachricht – keine Wiederholung von Headline/Stufe.
+    # ------------------------------------------------------------------
+    async def _cmd_swdetails(self, send: SendFn):
+        sw_status = self.app.sw_poller.status() if hasattr(self.app, "sw_poller") else {}
+
+        current_g = sw_status.get("current_g", 0)
+        current_r = sw_status.get("current_r", 0)
+        current_s = sw_status.get("current_s", 0)
+        forecast = sw_status.get("forecast_g", [])
+        last_poll = sw_status.get("last_poll", "")
+        poll_time = last_poll[11:16] if last_poll else "–"
+
+        msgs = []
+
+        # Nachricht 1: Kp-Level, Zeitstempel, Forecast
+        # (Stufe/Headline stehen bereits in der Erstnachricht)
+        g_str = f"G{current_g}" if current_g > 0 else "G0"
+        r_str = f"R{current_r}" if current_r > 0 else "R0"
+        s_str = f"S{current_s}" if current_s > 0 else "S0"
+
+        fc_parts = []
+        for fc in forecast:
+            if fc.get("g_scale", 0) > 0:
+                date_short = fc["date"][5:] if fc["date"] else "?"  # MM-DD
+                fc_parts.append(f"{date_short}:G{fc['g_scale']}")
+
+        fc_str = " ".join(fc_parts) if fc_parts else "ruhig"
+        msg1 = _trunc(f"Aktuell: {g_str} {r_str} {s_str} | Stand: {poll_time} | Forecast: {fc_str}")
+        msgs.append(msg1)
+
+        # Nachricht 2: nur wenn etwas aktiv ist (R oder S > 0)
+        if current_r > 0 or current_s > 0:
+            parts = []
+            if current_r > 0:
+                parts.append(f"R{current_r}: HF-Funk beeintr.")
+            if current_s > 0:
+                parts.append(f"S{current_s}: Teilchensturm/Satelliten")
+            msgs.append(_trunc(" | ".join(parts)))
+
+        # Falls Space-Weather-Poller nicht aktiv
+        if not sw_status or not sw_status.get("running"):
+            await send("Weltraumwetter-Poller nicht aktiv (space_weather.enabled: false).")
+            return
+
+        await self._send_sequence(msgs, send)
+
+    # ------------------------------------------------------------------
     # /help – 1 Nachricht
     # ------------------------------------------------------------------
     async def _cmd_help(self, send: SendFn):
-        await send("/details [n] /warnings [Ort] /status – WarnBridge")
+        await send("/details [n] /warnings [Ort] /swdetails /status – WarnBridge")
 
 
 # ------------------------------------------------------------------
-# Hilfsfunktion: /details Nachrichten aufbauen (max 3)
+# /details Nachrichten aufbauen (max 3)
 # ------------------------------------------------------------------
 def _format_details(w: dict, index: int, total: int) -> list[str]:
-    """
-    Baut max. 3 Nachrichten für /details.
-    1. Header: Index + Quelle + Severity + Headline
-    2. Gebiet
-    3. Beschreibung (max 120 Zeichen, gekürzt)
-    Instruction wird weggelassen.
-    """
-    msgs = []
-
-    sev = w.get("severity", "?")
     src = (w.get("source") or "?").upper()
     headline = w.get("headline") or "–"
     status = w.get("status", "actual")
     test_prefix = "[TEST] " if status == "test" else ""
 
-    # Nachricht 1: Header
+    # Space-Weather: kompakt, 1 Nachricht – Headline steht schon in der Erstnachricht
+    if w.get("source") == "space_weather":
+        desc = (w.get("description") or "").strip()
+        instr = (w.get("instruction") or "").strip()
+        # Beschreibung enthält Kp/Stufe/Zeit, Instruction enthält Forecast
+        parts = []
+        if desc:
+            parts.append(desc)
+        if instr:
+            parts.append(instr)
+        text = " | ".join(parts) if parts else headline
+        return [_trunc(f"[SW] {text}")]
+
+    # Normale Warnungen: bis zu 3 Nachrichten
+    msgs = []
+    sev = w.get("severity", "?")
     header = _trunc(f"[{index}/{total}] {test_prefix}{src} {sev} | {headline}")
     msgs.append(header)
 
-    # Nachricht 2: Gebiet
     area = _area_short(w.get("area_desc") or "–", max_len=MSG_LIMIT - len("Gebiet: "))
     msgs.append(_trunc(f"Gebiet: {area}"))
 
-    # Nachricht 3: Beschreibung (nur wenn vorhanden)
     desc = (w.get("description") or "").strip()
     if desc:
         msgs.append(_trunc(desc))

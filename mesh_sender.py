@@ -15,7 +15,7 @@ from typing import Optional, Callable, Awaitable
 logger = logging.getLogger(__name__)
 
 try:
-    from meshcore import MeshCore
+    from meshcore import MeshCore, EventType
     MESHCORE_AVAILABLE = True
 except ImportError:
     MESHCORE_AVAILABLE = False
@@ -35,8 +35,7 @@ def format_alert_message(w) -> str:
     """
     Stufe-1-Nachricht: max 120 Zeichen, reines ASCII-Prefix [!].
     Format: [!] QUELLE | Headline | Area | /details
-    Dynamisches Budget: Headline max 60 Zeichen, Area max 20 Zeichen.
-    Restbudget von kurzer Headline geht an Area.
+    Space-Weather-Warnungen nutzen [SW] statt [!].
     """
     source = w["source"] if isinstance(w, dict) else w.source
     headline = (w["headline"] if isinstance(w, dict) else w.headline) or ""
@@ -45,31 +44,40 @@ def format_alert_message(w) -> str:
     is_test = status == "test"
 
     source_label = {
-        "mowas": "WARNUNG",
-        "dwd":   "DWD",
-        "lhp":   "PEGEL",
-        "dab":   "DAB+",
+        "mowas":         "WARNUNG",
+        "dwd":           "DWD",
+        "lhp":           "PEGEL",
+        "dab":           "DAB+",
+        "space_weather": "WELTRAUM",
     }.get(source, "WARN")
 
-    prefix = f"[TEST] {source_label}" if is_test else f"[!] {source_label}"
+    if source == "space_weather":
+        prefix = "[SW]"
+    elif is_test:
+        prefix = f"[TEST] {source_label}"
+    else:
+        prefix = f"[!] {source_label}"
+
     suffix = " | /details"
 
     # Budget für headline + " | " + area
     overhead = len(prefix) + len(" | ") + len(" | ") + len(suffix)
-    budget = MSG_LIMIT - overhead  # verfügbare Zeichen für headline + area
+    budget = MSG_LIMIT - overhead
 
-    # Area: erste Komponente, max 20 Zeichen
-    area_short = area.split(",")[0].strip()
-    area_max = min(20, budget - 20 - 3)  # mind. 20 für headline
-    area_short = _trunc(area_short, max(10, area_max))
+    # Area: erste Komponente, max 20 Zeichen (bei space_weather weglassen – klar global)
+    if source == "space_weather":
+        area_short = ""
+        headline_budget = min(80, budget)
+        headline_short = _trunc(headline, max(10, headline_budget))
+        msg = f"{prefix} | {headline_short}{suffix}"
+    else:
+        area_short = area.split(",")[0].strip()
+        area_max = min(20, budget - 20 - 3)
+        area_short = _trunc(area_short, max(10, area_max))
+        headline_budget = min(60, budget - len(area_short) - 3)
+        headline_short = _trunc(headline, max(10, headline_budget))
+        msg = f"{prefix} | {headline_short} | {area_short}{suffix}"
 
-    # Headline bekommt den Rest, max 60
-    headline_budget = min(60, budget - len(area_short) - 3)
-    headline_short = _trunc(headline, max(10, headline_budget))
-
-    msg = f"{prefix} | {headline_short} | {area_short}{suffix}"
-
-    # Hartes Sicherheitsnetz
     if len(msg) > MSG_LIMIT:
         msg = msg[:MSG_LIMIT - 1] + "…"
 
@@ -94,6 +102,7 @@ class MeshSender:
         self._connected = False
         self._ws_broadcast: Optional[WsBroadcastType] = None
         self._sent_log: list[dict] = []
+        self._listen_task: Optional[asyncio.Task] = None
 
     def set_ws_broadcast(self, fn: WsBroadcastType):
         self._ws_broadcast = fn
@@ -112,14 +121,12 @@ class MeshSender:
             self._mc = await MeshCore.create_tcp(self.host, self.port)
             self._connected = True
             logger.info("MeshCore verbunden: %s:%d", self.host, self.port)
-            # Flood-Scope einmalig nach Connect setzen
             await self._set_scope()
         except Exception as e:
             self._connected = False
             logger.error("MeshCore Verbindung fehlgeschlagen: %s", e)
 
     async def _set_scope(self):
-        """Flood-Scope auf dem Gerät setzen. * = ganzes Mesh, #Region = regional."""
         if self._mc is None:
             return
         try:
@@ -130,10 +137,6 @@ class MeshSender:
 
     async def update_config(self, host: str, port: int, channel_idx: int,
                             scope: str, simulator: bool):
-        """
-        Wird bei Config-Reload aus dem Dashboard aufgerufen.
-        Aktualisiert Einstellungen live; wenn scope sich geändert hat → neu setzen.
-        """
         scope_changed = scope != self.scope
         self.host = host
         self.port = port
@@ -143,6 +146,54 @@ class MeshSender:
 
         if not simulator and self._connected and scope_changed:
             await self._set_scope()
+
+    def start_listen_loop(self, on_command: Callable[[str], Awaitable[None]]):
+        """Startet den Listen-Loop als asyncio Task."""
+        if self._listen_task and not self._listen_task.done():
+            return
+        self._listen_task = asyncio.create_task(
+            self.listen_loop(on_command), name="mesh_listen"
+        )
+
+    async def listen_loop(self, on_command: Callable[[str], Awaitable[None]]):
+        """
+        Empfängt eingehende MeshCore-Nachrichten und leitet Bot-Befehle weiter.
+        Fix: wait_for_event(EventType.CHANNEL_MSG_RECV) statt wait_for_msg() (existiert nicht).
+        Im Simulator-Modus: schläft ewig – Befehle kommen vom Dashboard per WebSocket.
+        """
+        if self.simulator:
+            await asyncio.Event().wait()
+            return
+
+        logger.info("MeshCore listen_loop gestartet (channel_idx=%d)", self.channel_idx)
+
+        while True:
+            try:
+                if not self._connected or self._mc is None:
+                    await asyncio.sleep(5)
+                    continue
+
+                event = await self._mc.wait_for_event(EventType.CHANNEL_MSG_RECV)
+                if event is None:
+                    continue
+
+                text = event.payload.get("text", "").strip()
+                channel = event.payload.get("channel_idx", -1)
+
+                if channel != self.channel_idx:
+                    continue
+
+                if text.startswith("/"):
+                    logger.debug("MeshCore Befehl empfangen: %s", text)
+                    await on_command(text)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("MeshCore receive Fehler: %s", e)
+                self._connected = False
+                await asyncio.sleep(10)
+                await self.connect()
 
     async def send_warning(self, w) -> bool:
         msg = format_alert_message(w)
@@ -170,7 +221,6 @@ class MeshSender:
                 await self._ws_broadcast({"event": "simulator_out", "data": entry})
             return True
 
-        # Produktivmodus
         if not self._connected or self._mc is None:
             logger.warning("MeshCore nicht verbunden – versuche Reconnect")
             await self.connect()
@@ -183,7 +233,6 @@ class MeshSender:
             if len(self._sent_log) > 100:
                 self._sent_log.pop(0)
             logger.info("[MESH OUT] %s", text)
-            # Im Produktivmodus ans Dashboard spiegeln damit der Output sichtbar bleibt
             if self._ws_broadcast:
                 await self._ws_broadcast({"event": "simulator_out", "data": entry})
             return True
