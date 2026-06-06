@@ -183,9 +183,15 @@ class MeshSender:
                 if channel != self.channel_idx:
                     continue
 
-                if text.startswith("/"):
-                    logger.debug("MeshCore Befehl empfangen: %s", text)
-                    await on_command(text)
+                # MeshCore-Nachrichten haben Format "NodeName | SCOPE: /befehl"
+                # Befehl ab dem ersten "/" extrahieren
+                cmd = None
+                if "/" in text:
+                    cmd = text[text.index("/"):].strip()
+
+                if cmd and cmd.startswith("/"):
+                    logger.debug("MeshCore Befehl empfangen: %s (raw: %s)", cmd, text)
+                    await on_command(cmd)
 
             except asyncio.CancelledError:
                 break
