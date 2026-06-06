@@ -403,7 +403,12 @@ class WarnBridge:
         self._tasks.append(asyncio.create_task(self.sw_poller.run(), name="sw_poller"))
 
         # MeshCore Listen-Loop starten (Bot-Befehle empfangen)
-        self.mesh.start_listen_loop(self.bot.handle)
+        async def _mesh_send(text: str) -> bool:
+            return await self.mesh.send_text(text, msg_type="reply")
+
+        self.mesh.start_listen_loop(
+            lambda cmd: self.bot.handle(cmd, _mesh_send)
+        )
 
         # Täglicher Cleanup
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))
