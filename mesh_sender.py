@@ -183,13 +183,17 @@ class MeshSender:
                 if channel != self.channel_idx:
                     continue
 
-                # MeshCore-Nachrichten haben Format "NodeName | SCOPE: /befehl"
-                # Befehl ab dem ersten "/" extrahieren
+                # Nutzernamen können "/" enthalten (z.B. "/p"), daher nicht am
+                # ersten "/" schneiden, sondern nach bekannten Befehlen suchen.
                 cmd = None
-                if "/" in text:
-                    cmd = text[text.index("/"):].strip()
+                lower_text = text.lower()
+                for marker in ("/swdetails", "/details", "/warnings", "/status", "/help"):
+                    pos = lower_text.find(marker)
+                    if pos != -1:
+                        cmd = text[pos:].strip()
+                        break
 
-                if cmd and cmd.startswith("/"):
+                if cmd:
                     logger.debug("MeshCore Befehl empfangen: %s (raw: %s)", cmd, text)
                     await on_command(cmd)
 
