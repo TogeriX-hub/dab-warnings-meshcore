@@ -52,6 +52,20 @@ class DedupCache:
                 first_seen TEXT NOT NULL
             )
         """)
+        # Broadcast-Level-Dedup: verhindert wiederholte Mesh-Nachrichten für
+        # dasselbe andauernde Ereignis (Kreis + Event-Typ), solange sich die
+        # Warnstufe (dwd_level) nicht ändert. Verfällt automatisch zum
+        # DWD-expires-Zeitpunkt der Warnung – danach gilt ein neuer Alert mit
+        # gleichem Level wieder als neues Ereignis.
+        # state_key = f"{district}|{event_type}"
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_level_state (
+                state_key TEXT PRIMARY KEY,
+                last_level INTEGER NOT NULL,
+                expires_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
         logger.debug("DedupCache initialisiert: %s", self.db_path)
 
@@ -119,15 +133,105 @@ class DedupCache:
         Nur aufrufen wenn mesh.send_warning() erfolgreich war."""
         self._hour_window.append(_now())
 
+    def check_broadcast_level(self, state_key: str, level: int, is_cancel: bool,
+                               expires_iso: Optional[str]) -> bool:
+        """
+        Level-basiertes Broadcast-Dedup für andauernde Ereignisse (z.B. DWD-Gewitter).
+        Gibt True zurück wenn gesendet werden SOLL (kein Duplikat), False wenn
+        unterdrückt werden soll.
+
+        Regeln:
+        - Cancel (Aufhebung) geht IMMER durch, State wird danach gelöscht.
+        - Sonst: nur senden wenn kein gespeicherter State existiert, der State
+          abgelaufen ist (expires_at in der Vergangenheit – d.h. seit dem
+          letzten Update kam lange nichts mehr, das Ereignis gilt als vorbei),
+          oder sich der Level gegenüber dem gespeicherten Wert geändert hat
+          (rauf ODER runter).
+        - WICHTIG: DWD setzt expires pro Zellen-Update nur 30-60 Min in die
+          Zukunft, nicht fürs Gesamtereignis. Daher wird bei jedem Update mit
+          UNVERÄNDERTEM Level der gespeicherte expires_at auf den neuen,
+          späteren Wert verlängert (Nachricht bleibt unterdrückt, State lebt
+          weiter) – so wird ein andauerndes Gewitter nicht fälschlich als
+          neues Ereignis gewertet, nur weil DWD kurze Gültigkeitsfenster
+          pro Update verwendet.
+        """
+        conn = self._get_conn()
+
+        if is_cancel:
+            # Aufhebung: immer senden, State danach löschen (Ereignis vorbei)
+            conn.execute(
+                "DELETE FROM broadcast_level_state WHERE state_key = ?",
+                (state_key,)
+            )
+            conn.commit()
+            logger.debug("Broadcast-Level: Cancel – immer senden (%s)", state_key)
+            return True
+
+        row = conn.execute(
+            "SELECT last_level, expires_at FROM broadcast_level_state WHERE state_key = ?",
+            (state_key,)
+        ).fetchone()
+
+        if row:
+            stored_expires = row["expires_at"]
+            expired = False
+            if stored_expires:
+                try:
+                    expired = datetime.fromisoformat(stored_expires) < _now()
+                except Exception:
+                    expired = False
+
+            if not expired and row["last_level"] == level:
+                # Gleicher Level, State noch gültig: Nachricht unterdrücken,
+                # aber Gültigkeit auf den neuen (späteren) expires-Wert
+                # verlängern, damit das andauernde Ereignis nicht zwischen
+                # zwei DWD-Updates "ausläuft".
+                if expires_iso and (not stored_expires or expires_iso > stored_expires):
+                    conn.execute(
+                        "UPDATE broadcast_level_state SET expires_at = ?, updated_at = ? WHERE state_key = ?",
+                        (expires_iso, _now().isoformat(), state_key)
+                    )
+                    conn.commit()
+                logger.debug(
+                    "Broadcast-Level: Duplikat – gleicher Level %d für %s (State verlängert)",
+                    level, state_key
+                )
+                return False
+            # Level geändert ODER alter State wirklich abgelaufen → senden + State neu setzen
+
+        conn.execute(
+            """INSERT OR REPLACE INTO broadcast_level_state
+               (state_key, last_level, expires_at, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            (state_key, level, expires_iso, _now().isoformat())
+        )
+        conn.commit()
+        logger.debug("Broadcast-Level: senden, neuer State Level %d für %s", level, state_key)
+        return True
+
     def cleanup_expired(self):
         """Abgelaufene Einträge aus der DB löschen. Täglich aufrufen."""
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
         c1 = conn.execute("DELETE FROM seen_ids WHERE first_seen <= ?", (cutoff,)).rowcount
         c2 = conn.execute("DELETE FROM seen_hashes WHERE first_seen <= ?", (cutoff,)).rowcount
+        # Level-States löschen deren expires_at in der Vergangenheit liegt
+        # (oder die kein expires_at haben aber > ttl_hours alt sind)
+        now_iso = _now().isoformat()
+        c3 = conn.execute(
+            "DELETE FROM broadcast_level_state WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (now_iso,)
+        ).rowcount
+        c4 = conn.execute(
+            "DELETE FROM broadcast_level_state WHERE expires_at IS NULL AND updated_at <= ?",
+            (cutoff,)
+        ).rowcount
         conn.commit()
-        if c1 or c2:
-            logger.info("Dedup cleanup: %d IDs, %d Hashes gelöscht", c1, c2)
+        if c1 or c2 or c3 or c4:
+            logger.info(
+                "Dedup cleanup: %d IDs, %d Hashes, %d+%d Level-States gelöscht",
+                c1, c2, c3, c4
+            )
 
     def stats(self) -> dict:
         conn = self._get_conn()

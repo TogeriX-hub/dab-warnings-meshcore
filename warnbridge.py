@@ -146,21 +146,45 @@ class WarnBridge:
 
         if should_broadcast:
             w_send = self._prepare_for_broadcast(w)
-            # Broadcast-Dedup: gleiche Warnung für gleichen Kreis nur 1x senden
-            # Hash aus headline + Minute + area_desc (= konfigurierter Kreis)
-            # Hash auf Stunde (nicht Minute) – alle Gewitter-Warnungen innerhalb
-            # einer Stunde für denselben Broadcast-Kreis = eine Nachricht
-            sent_hour = w.sent.strftime("%Y-%m-%dT%H") if w.sent else ""
-            broadcast_hash = f"{w.headline.lower()}|{sent_hour}|{w_send.area_desc}"
-            import hashlib as _hl
-            b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
-            if self.is_broadcast_duplicate(b_hash):
-                logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
-                             w.headline, w_send.area_desc)
+
+            # Broadcast-Dedup:
+            # - DWD-Warnungen (haben dwd_level): Level-State pro Kreis+Event.
+            #   Nur senden wenn Level sich geändert hat (rauf/runter) oder
+            #   der State abgelaufen ist (DWD expires erreicht). Cancel geht
+            #   immer durch. Das verhindert Mesh-Spam bei andauernden
+            #   Gewittern, die DWD alle paar Minuten als neues CAP-Objekt
+            #   pro Zelle nachsendet, ohne dass sich an der Lage real etwas
+            #   ändert.
+            # - Andere Quellen (mowas, dab, space_weather): wie bisher
+            #   1x pro Kreis+Ereignis über den alten Hash-Mechanismus,
+            #   da hier kein vergleichbares Level-Feld existiert.
+            should_send = True
+            if w.source == "dwd" and w.dwd_level is not None:
+                state_key = f"{w_send.area_desc}|{w.dwd_event_type or ''}"
+                is_cancel = (w.msg_type or "").lower() == "cancel"
+                expires_iso = w.expires.isoformat() if w.expires else None
+                should_send = self.dedup.check_broadcast_level(
+                    state_key, w.dwd_level, is_cancel, expires_iso
+                )
+                if not should_send:
+                    logger.debug("Broadcast-Level-Duplikat übersprungen: %s | Level %s",
+                                 state_key, w.dwd_level)
+            else:
+                import hashlib as _hl
+                broadcast_hash = f"{w.headline.lower()}|{w_send.area_desc}"
+                b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
+                if self.is_broadcast_duplicate(b_hash):
+                    should_send = False
+                    logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
+                                 w.headline, w_send.area_desc)
+                else:
+                    self.mark_broadcast_seen(b_hash)
+
+            if not should_send:
+                pass
             elif self.dedup.is_rate_limited():
                 logger.warning("Rate-Limit – Warnung nicht gesendet: %s", w.headline)
             else:
-                self.mark_broadcast_seen(b_hash)
                 logger.info("🚨 WARNUNG [%s] %s → Mesh | Gebiet: %s",
                             w.source.upper(), w.headline, w_send.area_desc)
                 success = await self.mesh.send_warning(w_send)
@@ -318,11 +342,23 @@ class WarnBridge:
             if not self._passes_broadcast_filters(w):
                 continue
 
+            w_send = self._prepare_for_broadcast(w)
+
+            # Gleiches Level-Dedup wie in handle_warning() – verhindert dass
+            # beim Einschalten von Broadcasting ein Schwall veralteter
+            # DWD-Updates (gleicher Level, längst überholt) rausgeht.
+            if w.source == "dwd" and w.dwd_level is not None:
+                state_key = f"{w_send.area_desc}|{w.dwd_event_type or ''}"
+                is_cancel = (w.msg_type or "").lower() == "cancel"
+                expires_iso = w.expires.isoformat() if w.expires else None
+                if not self.dedup.check_broadcast_level(state_key, w.dwd_level, is_cancel, expires_iso):
+                    logger.debug("Nachsenden übersprungen (Level-Duplikat): %s", state_key)
+                    continue
+
             if self.dedup.is_rate_limited():
                 logger.warning("Rate-Limit beim Nachsenden – abgebrochen nach %d Warnungen", sent_count)
                 break
 
-            w_send = self._prepare_for_broadcast(w)
             logger.info("📤 Nachsenden [%s] %s → Gebiet: %s",
                         w.source.upper(), w.headline, w_send.area_desc)
             success = await self.mesh.send_warning(w_send)
