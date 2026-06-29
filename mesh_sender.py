@@ -183,14 +183,22 @@ class MeshSender:
                 if channel != self.channel_idx:
                     continue
 
-                # Nutzernamen können "/" enthalten (z.B. "/p"), daher nicht am
-                # ersten "/" schneiden, sondern nach bekannten Befehlen suchen.
+                # Ein Befehl ist nur gültig wenn der Marker am Anfang der Nachricht
+                # steht (direkt oder nach kurzem Absender-Präfix "Name: /cmd").
+                # Damit werden Warnmeldungen ignoriert, die zufällig mit "/warnings"
+                # enden (z.B. weil ein anderer Bot das als Suffix anhängt).
                 cmd = None
-                lower_text = text.lower()
+                stripped = text.strip()
+                lower_stripped = stripped.lower()
                 for marker in ("/swdetails", "/details", "/warnings", "/status", "/help"):
-                    pos = lower_text.find(marker)
-                    if pos != -1:
-                        cmd = text[pos:].strip()
+                    if lower_stripped.startswith(marker):
+                        # Direkt als Befehl: "/warnings" oder "/warnings Rosenheim"
+                        cmd = stripped
+                        break
+                    # "NodeName: /befehl" – Absenderpräfix max. 50 Zeichen
+                    colon_pos = lower_stripped.find(": " + marker)
+                    if colon_pos != -1 and colon_pos <= 50:
+                        cmd = stripped[colon_pos + 2:].strip()
                         break
 
                 if cmd:
