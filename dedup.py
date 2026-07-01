@@ -158,13 +158,29 @@ class DedupCache:
         conn = self._get_conn()
 
         if is_cancel:
-            # Aufhebung: immer senden, State danach löschen (Ereignis vorbei)
-            conn.execute(
-                "DELETE FROM broadcast_level_state WHERE state_key = ?",
+            # Cancel: immer senden beim ersten Mal, aber State als "cancel"-Marker
+            # setzen (level=-1) statt zu löschen – damit ein zweiter Cancel für
+            # denselben Kreis im selben oder nächsten Poll-Batch geblockt wird.
+            # DWD sendet Cancel gelegentlich mehrfach nach (eigene CAP-Objekte
+            # pro Zelle, alle innerhalb von Minuten bis ~1h).
+            row = conn.execute(
+                "SELECT last_level FROM broadcast_level_state WHERE state_key = ?",
                 (state_key,)
+            ).fetchone()
+            if row and row["last_level"] == -1:
+                # Bereits als Cancel markiert → unterdrücken
+                logger.debug("Broadcast-Level: Cancel-Duplikat unterdrückt (%s)", state_key)
+                return False
+            # Erstes Cancel: senden und State als cancel-Marker (-1) für 30 Min setzen
+            cancel_expires = (_now() + timedelta(minutes=30)).isoformat()
+            conn.execute(
+                """INSERT OR REPLACE INTO broadcast_level_state
+                   (state_key, last_level, expires_at, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                (state_key, -1, cancel_expires, _now().isoformat())
             )
             conn.commit()
-            logger.debug("Broadcast-Level: Cancel – immer senden (%s)", state_key)
+            logger.debug("Broadcast-Level: Cancel – senden, State als Cancel-Marker gesetzt (%s)", state_key)
             return True
 
         row = conn.execute(
@@ -186,12 +202,20 @@ class DedupCache:
                 # aber Gültigkeit auf den neuen (späteren) expires-Wert
                 # verlängern, damit das andauernde Ereignis nicht zwischen
                 # zwei DWD-Updates "ausläuft".
-                if expires_iso and (not stored_expires or expires_iso > stored_expires):
-                    conn.execute(
-                        "UPDATE broadcast_level_state SET expires_at = ?, updated_at = ? WHERE state_key = ?",
-                        (expires_iso, _now().isoformat(), state_key)
-                    )
-                    conn.commit()
+                if expires_iso:
+                    # Sicherstellen dass neues expires nicht in der Vergangenheit liegt
+                    new_expires = expires_iso
+                    try:
+                        if datetime.fromisoformat(expires_iso) < _now():
+                            new_expires = (_now() + timedelta(minutes=30)).isoformat()
+                    except Exception:
+                        pass
+                    if not stored_expires or new_expires > stored_expires:
+                        conn.execute(
+                            "UPDATE broadcast_level_state SET expires_at = ?, updated_at = ? WHERE state_key = ?",
+                            (new_expires, _now().isoformat(), state_key)
+                        )
+                        conn.commit()
                 logger.debug(
                     "Broadcast-Level: Duplikat – gleicher Level %d für %s (State verlängert)",
                     level, state_key
@@ -199,11 +223,26 @@ class DedupCache:
                 return False
             # Level geändert ODER alter State wirklich abgelaufen → senden + State neu setzen
 
+        # Sicherstellen dass expires_at nicht bereits in der Vergangenheit liegt –
+        # DWD liefert gelegentlich Meldungen mit expires das schon abgelaufen ist
+        # (z.B. verzögerte Zustellung). In dem Fall Mindest-Fenster von 30 Min ab jetzt.
+        effective_expires = expires_iso
+        if expires_iso:
+            try:
+                if datetime.fromisoformat(expires_iso) < _now():
+                    effective_expires = (_now() + timedelta(minutes=30)).isoformat()
+                    logger.debug(
+                        "Broadcast-Level: expires bereits abgelaufen, Fallback +30min (%s)",
+                        state_key
+                    )
+            except Exception:
+                pass
+
         conn.execute(
             """INSERT OR REPLACE INTO broadcast_level_state
                (state_key, last_level, expires_at, updated_at)
                VALUES (?, ?, ?, ?)""",
-            (state_key, level, expires_iso, _now().isoformat())
+            (state_key, level, effective_expires, _now().isoformat())
         )
         conn.commit()
         logger.debug("Broadcast-Level: senden, neuer State Level %d für %s", level, state_key)
