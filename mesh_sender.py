@@ -36,6 +36,15 @@ LISTEN_TIMEOUT = 60             # wake up the receive loop regularly
 # corrects it during health checks when it drifts more than this.
 CLOCK_MAX_DRIFT = 30            # seconds
 
+# TX hang detection: the node can keep answering over TCP while its LoRa
+# radio no longer transmits (send_chan_msg still returns OK). After every
+# send we watch the node's own "sent" packet counter; if it does not move
+# within TX_VERIFY_TIMEOUT the radio is considered stuck and the node gets
+# a reboot command (at most once per REBOOT_COOLDOWN).
+TX_VERIFY_TIMEOUT = 45          # seconds (flood TX can be delayed a bit)
+TX_VERIFY_POLL = 5              # seconds between counter reads
+REBOOT_COOLDOWN = 30 * 60       # seconds
+
 
 def _trunc(text: str, max_len: int) -> str:
     """Text auf max_len Zeichen kürzen, mit … wenn nötig."""
@@ -122,6 +131,12 @@ class MeshSender:
         self._listen_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
         self._connect_lock = asyncio.Lock()
+        self._tx_hang_count = 0
+        self._last_reboot: Optional[float] = None
+        self._last_reboot_reason: Optional[str] = None
+        self._verify_tasks: set[asyncio.Task] = set()
+        # messages lost to a TX hang, sent once more after the node is back
+        self._resend_queue: list[tuple[str, str]] = []
 
     def set_ws_broadcast(self, fn: WsBroadcastType):
         self._ws_broadcast = fn
@@ -204,6 +219,10 @@ class MeshSender:
             logger.info("MeshCore verbunden: %s:%d", self.host, self.port)
             await self._sync_clock(force=True)
             await self._set_scope()
+            if self._resend_queue:
+                task = asyncio.create_task(self._flush_resend_queue(), name="mesh_resend")
+                self._verify_tasks.add(task)
+                task.add_done_callback(self._verify_tasks.discard)
 
     async def _sync_clock(self, force: bool = False, node_time: Optional[int] = None):
         """Set the node clock to the Pi's time (force, or when drift is too big)."""
@@ -261,6 +280,87 @@ class MeshSender:
             await self._sync_clock(node_time=node_time)
         except Exception as e:
             logger.debug("Uhr-Check fehlgeschlagen: %s", e)
+        return True
+
+    # ── TX hang detection ────────────────────────────────────────────
+
+    async def _get_sent_count(self) -> Optional[int]:
+        """Node's own counter of transmitted packets, None if unavailable."""
+        if self._mc is None:
+            return None
+        try:
+            res = await asyncio.wait_for(self._mc.commands.get_stats_packets(),
+                                         timeout=HEALTH_CHECK_TIMEOUT)
+        except Exception:
+            return None
+        if res is None or res.type == EventType.ERROR:
+            return None
+        try:
+            return int((res.payload or {}).get("sent"))
+        except (TypeError, ValueError):
+            return None
+
+    def _start_tx_verify(self, baseline: int, text: str):
+        task = asyncio.create_task(self._verify_tx(baseline, text), name="mesh_tx_verify")
+        self._verify_tasks.add(task)
+        task.add_done_callback(self._verify_tasks.discard)
+
+    async def _verify_tx(self, baseline: int, text: str):
+        waited = 0
+        while waited < TX_VERIFY_TIMEOUT:
+            await asyncio.sleep(TX_VERIFY_POLL)
+            waited += TX_VERIFY_POLL
+            if not self._connected:
+                return  # connection handling takes over
+            count = await self._get_sent_count()
+            if count is None:
+                return  # stats not readable – can't judge
+            if count > baseline or count < baseline:
+                # increased = sent; decreased = node rebooted meanwhile
+                return
+        self._tx_hang_count += 1
+        logger.error("[MESH TX HANG] Node hat bestätigt, aber nichts gefunkt "
+                     "(sent-Zähler bleibt bei %d): %s", baseline, text)
+        if len(self._resend_queue) < 10:
+            self._resend_queue.append((text, "resend"))
+        await self.reboot_node("Funkmodul sendet nicht")
+
+    async def _flush_resend_queue(self):
+        """Re-send messages lost to a TX hang (once, without new verify loop)."""
+        await asyncio.sleep(10)  # let the node settle after boot
+        queue, self._resend_queue = self._resend_queue, []
+        for text, _ in queue:
+            if not self._connected or self._mc is None:
+                self._resend_queue.append((text, "resend"))
+                continue
+            try:
+                res = await self._mc.commands.send_chan_msg(self.channel_idx, text)
+                if res is not None and res.type != EventType.ERROR:
+                    logger.info("[MESH OUT] (erneut nach Neustart) %s", text)
+                else:
+                    logger.error("[MESH FAIL] Erneutes Senden fehlgeschlagen: %s", text)
+            except Exception as e:
+                logger.error("[MESH FAIL] Erneutes Senden fehlgeschlagen (%s): %s", e, text)
+            await asyncio.sleep(10)  # same pacing as warnbridge rate limit
+
+    async def reboot_node(self, reason: str) -> bool:
+        """Send a reboot command to the node (rate-limited)."""
+        now = time.time()
+        if self._last_reboot and now - self._last_reboot < REBOOT_COOLDOWN:
+            logger.warning("MeshCore Neustart übersprungen (%s) – letzter Neustart vor %d min",
+                           reason, int((now - self._last_reboot) / 60))
+            return False
+        if self._mc is None:
+            return False
+        self._last_reboot = now
+        self._last_reboot_reason = f"{_now_str()} {reason}"
+        logger.warning("MeshCore Node wird neu gestartet: %s", reason)
+        try:
+            await asyncio.wait_for(self._mc.commands.reboot(), timeout=HEALTH_CHECK_TIMEOUT)
+        except Exception as e:
+            logger.debug("Reboot-Befehl: %s", e)
+        self._mark_disconnected(f"Neustart: {reason}")
+        # reconnect is done by warnbridge._mesh_reconnect_loop once the node is back
         return True
 
     async def _health_loop(self):
@@ -395,6 +495,8 @@ class MeshSender:
             if not self._connected or self._mc is None:
                 return False
 
+        baseline = await self._get_sent_count()
+
         try:
             res = await self._mc.commands.send_chan_msg(self.channel_idx, text)
         except Exception as e:
@@ -415,6 +517,8 @@ class MeshSender:
         if len(self._sent_log) > 100:
             self._sent_log.pop(0)
         logger.info("[MESH OUT] %s", text)
+        if baseline is not None:
+            self._start_tx_verify(baseline, text)
         if self._ws_broadcast:
             await self._ws_broadcast({"event": "simulator_out", "data": entry})
         return True
@@ -435,4 +539,6 @@ class MeshSender:
             "last_ok": self._last_ok,
             "last_error": self._last_error,
             "disconnect_count": self._disconnect_count,
+            "tx_hang_count": self._tx_hang_count,
+            "last_reboot": self._last_reboot_reason,
         }
