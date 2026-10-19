@@ -133,6 +133,7 @@ class WarnBridge:
         # Dedup-Prüfung
         if self.dedup.is_duplicate(w.identifier, w.content_hash):
             logger.debug("Duplikat übersprungen: %s", w.identifier)
+            self.db.touch(w.identifier)
             return
 
         # Broadcast-Filter: nur Auto-Alert wenn Kreis in broadcast_districts

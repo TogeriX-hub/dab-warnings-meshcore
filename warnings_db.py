@@ -84,6 +84,12 @@ class WarningsDB:
                 payload TEXT NOT NULL              -- vollständiges JSON (NormalizedWarning)
             )
         """)
+        # Migration: last_seen = letzter Poll in dem die Warnung noch geliefert
+        # wurde. Hält langlaufende Warnungen in /warnings sichtbar, ohne dass
+        # sie täglich neu gespeichert (und neu gesendet) werden.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(warnings)").fetchall()]
+        if "last_seen" not in cols:
+            conn.execute("ALTER TABLE warnings ADD COLUMN last_seen TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_identifier ON warnings(identifier)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_stored_at ON warnings(stored_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_source ON warnings(source)")
@@ -116,6 +122,13 @@ class WarningsDB:
         conn.commit()
         return cur.lastrowid
 
+    def touch(self, identifier: str):
+        """Warnung ist im aktuellen Poll noch aktiv → last_seen auffrischen."""
+        conn = self._get_conn()
+        conn.execute("UPDATE warnings SET last_seen = ? WHERE identifier = ?",
+                     (_now().isoformat(), identifier))
+        conn.commit()
+
     def mark_broadcast_sent(self, db_id: int):
         conn = self._get_conn()
         conn.execute("UPDATE warnings SET broadcast_sent = 1 WHERE id = ?", (db_id,))
@@ -130,7 +143,7 @@ class WarningsDB:
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
         rows = conn.execute(
             """SELECT * FROM warnings
-               WHERE stored_at > ?
+               WHERE COALESCE(last_seen, stored_at) > ?
                ORDER BY stored_at DESC""",
             (cutoff,)
         ).fetchall()
@@ -174,7 +187,7 @@ class WarningsDB:
 
         rows = conn.execute(
             """SELECT * FROM warnings
-               WHERE stored_at > ?
+               WHERE COALESCE(last_seen, stored_at) > ?
                ORDER BY stored_at DESC""",
             (cutoff,)
         ).fetchall()
@@ -199,7 +212,7 @@ class WarningsDB:
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
         rows = conn.execute(
-            "SELECT * FROM warnings WHERE stored_at > ? ORDER BY stored_at DESC LIMIT ?",
+            "SELECT * FROM warnings WHERE COALESCE(last_seen, stored_at) > ? ORDER BY stored_at DESC LIMIT ?",
             (cutoff, n)
         ).fetchall()
         return [_from_row(r) for r in rows]
@@ -209,7 +222,7 @@ class WarningsDB:
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=hours)).isoformat()
         rows = conn.execute(
-            "SELECT * FROM warnings WHERE stored_at > ? ORDER BY stored_at DESC",
+            "SELECT * FROM warnings WHERE COALESCE(last_seen, stored_at) > ? ORDER BY stored_at DESC",
             (cutoff,)
         ).fetchall()
         return [_from_row(r) for r in rows]
@@ -223,7 +236,7 @@ class WarningsDB:
         cutoff = (_now() - timedelta(hours=hours)).isoformat()
         rows = conn.execute(
             """SELECT * FROM warnings
-               WHERE stored_at > ? AND broadcast_sent = 0
+               WHERE COALESCE(last_seen, stored_at) > ? AND broadcast_sent = 0
                ORDER BY stored_at ASC""",
             (cutoff,)
         ).fetchall()
@@ -233,7 +246,7 @@ class WarningsDB:
         """Abgelaufene Einträge löschen. Täglich aufrufen."""
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
-        c = conn.execute("DELETE FROM warnings WHERE stored_at <= ?", (cutoff,)).rowcount
+        c = conn.execute("DELETE FROM warnings WHERE COALESCE(last_seen, stored_at) <= ?", (cutoff,)).rowcount
         conn.commit()
         if c:
             logger.info("WarningsDB cleanup: %d Einträge gelöscht", c)
@@ -241,10 +254,10 @@ class WarningsDB:
     def stats(self) -> dict:
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
-        total = conn.execute("SELECT COUNT(*) FROM warnings WHERE stored_at > ?", (cutoff,)).fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM warnings WHERE COALESCE(last_seen, stored_at) > ?", (cutoff,)).fetchone()[0]
         by_source = {}
         for row in conn.execute(
-            "SELECT source, COUNT(*) as n FROM warnings WHERE stored_at > ? GROUP BY source",
+            "SELECT source, COUNT(*) as n FROM warnings WHERE COALESCE(last_seen, stored_at) > ? GROUP BY source",
             (cutoff,)
         ).fetchall():
             by_source[row["source"]] = row["n"]

@@ -72,7 +72,9 @@ class DedupCache:
     def is_duplicate(self, identifier: str, content_hash: str) -> bool:
         """
         Gibt True zurück wenn die Meldung bereits bekannt ist (nicht weiterleiten).
-        Prüft: ID-Cache → Content-Hash-Cache → Stunden-Limit.
+        Prüft: ID-Cache → Content-Hash-Cache.
+        Ein Treffer frischt den Zeitstempel auf – die TTL zählt also ab dem
+        letzten Mal, an dem die Meldung gesehen wurde, nicht ab dem ersten.
         """
         conn = self._get_conn()
         cutoff = (_now() - timedelta(hours=self.ttl_hours)).isoformat()
@@ -83,6 +85,12 @@ class DedupCache:
             (identifier, cutoff)
         ).fetchone()
         if row:
+            # Refresh: as long as NINA keeps delivering the warning it stays
+            # known. Otherwise long-running warnings (e.g. a boil-water notice
+            # active for weeks) fall out of the 24h cache and are re-sent daily.
+            conn.execute("UPDATE seen_ids SET first_seen = ? WHERE identifier = ?",
+                         (_now().isoformat(), identifier))
+            conn.commit()
             logger.debug("Dedup: ID bekannt – %s", identifier)
             return True
 
@@ -93,6 +101,9 @@ class DedupCache:
                 (content_hash, cutoff)
             ).fetchone()
             if row:
+                conn.execute("UPDATE seen_hashes SET first_seen = ? WHERE content_hash = ?",
+                             (_now().isoformat(), content_hash))
+                conn.commit()
                 logger.debug("Dedup: Content-Hash bekannt – %s", content_hash)
                 return True
 
