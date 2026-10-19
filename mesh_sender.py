@@ -23,6 +23,13 @@ except ImportError:
 
 MSG_LIMIT = 120
 
+# Health check: ask the node for its clock regularly. A dead TCP link
+# (Heltec rebooted / WLAN blip without FIN) is otherwise never noticed,
+# because send_chan_msg() returns an ERROR event instead of raising.
+HEALTH_CHECK_INTERVAL = 120     # seconds between checks
+HEALTH_CHECK_TIMEOUT = 10       # seconds to wait for the node's answer
+LISTEN_TIMEOUT = 60             # wake up the receive loop regularly
+
 
 def _trunc(text: str, max_len: int) -> str:
     """Text auf max_len Zeichen kürzen, mit … wenn nötig."""
@@ -100,12 +107,59 @@ class MeshSender:
         self.scope = config.get("scope", "*")
         self._mc: Optional[object] = None
         self._connected = False
+        self._connected_since: Optional[str] = None
+        self._last_ok: Optional[str] = None
+        self._last_error: Optional[str] = None
+        self._disconnect_count = 0
         self._ws_broadcast: Optional[WsBroadcastType] = None
         self._sent_log: list[dict] = []
         self._listen_task: Optional[asyncio.Task] = None
+        self._health_task: Optional[asyncio.Task] = None
+        self._connect_lock = asyncio.Lock()
 
     def set_ws_broadcast(self, fn: WsBroadcastType):
         self._ws_broadcast = fn
+
+    # ── connection handling ──────────────────────────────────────────
+
+    def _mark_ok(self):
+        self._last_ok = datetime.now(timezone.utc).isoformat()
+
+    def _mark_disconnected(self, reason: str):
+        """Flag the link as dead so _mesh_reconnect_loop picks it up."""
+        if self._connected:
+            self._disconnect_count += 1
+            logger.warning("MeshCore Verbindung verloren (%s) – Reconnect folgt", reason)
+        self._connected = False
+        self._last_error = f"{_now_str()} {reason}"
+
+    async def _close_old(self):
+        """Close a previous MeshCore instance so no half-dead socket lingers."""
+        old = self._mc
+        self._mc = None
+        if old is None:
+            return
+        try:
+            await old.disconnect()
+        except Exception:
+            pass
+        # disconnect() skips closing the socket once the library already
+        # considers itself disconnected – close the transport explicitly.
+        try:
+            cm = getattr(old, "connection_manager", None)
+            cx = getattr(cm, "connection", None)
+            if cx is not None:
+                await cx.disconnect()
+        except Exception:
+            pass
+
+    async def _on_lib_disconnect(self, event):
+        reason = ""
+        try:
+            reason = (event.payload or {}).get("reason", "")
+        except Exception:
+            pass
+        self._mark_disconnected(f"library: {reason or 'disconnected'}")
 
     async def connect(self):
         if self.simulator:
@@ -117,14 +171,32 @@ class MeshSender:
             logger.error("meshcore Library nicht verfügbar und kein Simulator-Modus")
             return
 
-        try:
-            self._mc = await MeshCore.create_tcp(self.host, self.port)
+        async with self._connect_lock:
+            await self._close_old()
+            try:
+                mc = await MeshCore.create_tcp(self.host, self.port)
+            except Exception as e:
+                self._mark_disconnected(f"connect: {e}")
+                logger.error("MeshCore Verbindung fehlgeschlagen: %s", e)
+                return
+
+            if mc is None:
+                self._mark_disconnected("connect: keine Antwort vom Node")
+                logger.error("MeshCore Verbindung fehlgeschlagen: keine Antwort von %s:%d",
+                             self.host, self.port)
+                return
+
+            self._mc = mc
+            try:
+                mc.subscribe(EventType.DISCONNECTED, self._on_lib_disconnect)
+            except Exception as e:
+                logger.debug("DISCONNECTED-Subscription fehlgeschlagen: %s", e)
+
             self._connected = True
+            self._connected_since = datetime.now(timezone.utc).isoformat()
+            self._mark_ok()
             logger.info("MeshCore verbunden: %s:%d", self.host, self.port)
             await self._set_scope()
-        except Exception as e:
-            self._connected = False
-            logger.error("MeshCore Verbindung fehlgeschlagen: %s", e)
 
     async def _set_scope(self):
         if self._mc is None:
@@ -134,6 +206,41 @@ class MeshSender:
             logger.info("MeshCore Flood-Scope gesetzt: %s", self.scope)
         except Exception as e:
             logger.warning("MeshCore set_flood_scope fehlgeschlagen: %s", e)
+
+    async def health_check(self) -> bool:
+        """Ask the node for its time. True = node answers over TCP."""
+        if self.simulator:
+            return True
+        if not self._connected or self._mc is None:
+            return False
+        try:
+            if hasattr(self._mc, "is_connected") and not self._mc.is_connected:
+                self._mark_disconnected("library meldet getrennt")
+                return False
+            res = await asyncio.wait_for(self._mc.commands.get_time(),
+                                         timeout=HEALTH_CHECK_TIMEOUT + 5)
+        except Exception as e:
+            self._mark_disconnected(f"health check: {e}")
+            return False
+
+        if res is None or res.type == EventType.ERROR:
+            payload = getattr(res, "payload", None)
+            self._mark_disconnected(f"health check: keine Antwort ({payload})")
+            return False
+
+        self._mark_ok()
+        return True
+
+    async def _health_loop(self):
+        while True:
+            await asyncio.sleep(HEALTH_CHECK_INTERVAL)
+            try:
+                if self._connected and not self.simulator:
+                    await self.health_check()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("MeshCore health loop Fehler: %s", e)
 
     async def update_config(self, host: str, port: int, channel_idx: int,
                             scope: str, simulator: bool):
@@ -147,18 +254,24 @@ class MeshSender:
         if not simulator and self._connected and scope_changed:
             await self._set_scope()
 
+    # ── receive ──────────────────────────────────────────────────────
+
     def start_listen_loop(self, on_command: Callable[[str], Awaitable[None]]):
-        """Startet den Listen-Loop als asyncio Task."""
-        if self._listen_task and not self._listen_task.done():
-            return
-        self._listen_task = asyncio.create_task(
-            self.listen_loop(on_command), name="mesh_listen"
-        )
+        """Startet Listen-Loop und Health-Check als asyncio Tasks."""
+        if not (self._listen_task and not self._listen_task.done()):
+            self._listen_task = asyncio.create_task(
+                self.listen_loop(on_command), name="mesh_listen"
+            )
+        if not (self._health_task and not self._health_task.done()):
+            self._health_task = asyncio.create_task(
+                self._health_loop(), name="mesh_health"
+            )
 
     async def listen_loop(self, on_command: Callable[[str], Awaitable[None]]):
         """
         Empfängt eingehende MeshCore-Nachrichten und leitet Bot-Befehle weiter.
-        Fix: wait_for_event(EventType.CHANNEL_MSG_RECV) statt wait_for_msg() (existiert nicht).
+        wait_for_event() bekommt ein Timeout, damit der Loop nach einem Reconnect
+        auf die neue MeshCore-Instanz wechselt statt ewig auf der alten zu warten.
         Im Simulator-Modus: schläft ewig – Befehle kommen vom Dashboard per WebSocket.
         """
         if self.simulator:
@@ -169,14 +282,17 @@ class MeshSender:
 
         while True:
             try:
-                if not self._connected or self._mc is None:
+                mc = self._mc
+                if not self._connected or mc is None:
                     await asyncio.sleep(5)
                     continue
 
-                event = await self._mc.wait_for_event(EventType.CHANNEL_MSG_RECV)
+                event = await mc.wait_for_event(EventType.CHANNEL_MSG_RECV,
+                                                timeout=LISTEN_TIMEOUT)
                 if event is None:
                     continue
 
+                self._mark_ok()
                 text = event.payload.get("text", "").strip()
                 channel = event.payload.get("channel_idx", -1)
 
@@ -202,16 +318,18 @@ class MeshSender:
                         break
 
                 if cmd:
-                    logger.debug("MeshCore Befehl empfangen: %s (raw: %s)", cmd, text)
+                    logger.info("MeshCore Befehl empfangen: %s", cmd)
                     await on_command(cmd)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("MeshCore receive Fehler: %s", e)
-                self._connected = False
+                self._mark_disconnected(f"receive: {e}")
                 await asyncio.sleep(10)
-                await self.connect()
+                # reconnect is done by warnbridge._mesh_reconnect_loop
+
+    # ── send ─────────────────────────────────────────────────────────
 
     async def send_warning(self, w) -> bool:
         msg = format_alert_message(w)
@@ -242,22 +360,32 @@ class MeshSender:
         if not self._connected or self._mc is None:
             logger.warning("MeshCore nicht verbunden – versuche Reconnect")
             await self.connect()
-            if not self._connected:
+            if not self._connected or self._mc is None:
                 return False
 
         try:
-            await self._mc.commands.send_chan_msg(self.channel_idx, text)
-            self._sent_log.append(entry)
-            if len(self._sent_log) > 100:
-                self._sent_log.pop(0)
-            logger.info("[MESH OUT] %s", text)
-            if self._ws_broadcast:
-                await self._ws_broadcast({"event": "simulator_out", "data": entry})
-            return True
+            res = await self._mc.commands.send_chan_msg(self.channel_idx, text)
         except Exception as e:
             logger.error("MeshCore send Fehler: %s", e)
-            self._connected = False
+            self._mark_disconnected(f"send: {e}")
             return False
+
+        # send_chan_msg() does not raise on failure – it returns an ERROR
+        # event (e.g. after the 15s timeout when the node is gone).
+        if res is None or res.type == EventType.ERROR:
+            payload = getattr(res, "payload", None)
+            logger.error("[MESH FAIL] Node hat nicht bestätigt (%s): %s", payload, text)
+            self._mark_disconnected(f"send: keine Bestätigung ({payload})")
+            return False
+
+        self._mark_ok()
+        self._sent_log.append(entry)
+        if len(self._sent_log) > 100:
+            self._sent_log.pop(0)
+        logger.info("[MESH OUT] %s", text)
+        if self._ws_broadcast:
+            await self._ws_broadcast({"event": "simulator_out", "data": entry})
+        return True
 
     def get_sent_log(self) -> list[dict]:
         return list(reversed(self._sent_log))
@@ -271,4 +399,8 @@ class MeshSender:
             "channel_idx": self.channel_idx,
             "scope": self.scope,
             "sent_count": len(self._sent_log),
+            "connected_since": self._connected_since,
+            "last_ok": self._last_ok,
+            "last_error": self._last_error,
+            "disconnect_count": self._disconnect_count,
         }
