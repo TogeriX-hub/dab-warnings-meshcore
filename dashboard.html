@@ -496,19 +496,41 @@
 let ws = null, isSimulator = false, retryDelay = 2000;
 let cfg = {}, allDistricts = [], selectedDistricts = [];
 
+// Official DWD warning criteria (wettergefahren.de, issue #8).
+// v = DWD level 1-4 (Minor/Moderate/Severe/Extreme), only the levels
+// the DWD actually issues for each event are offered.
 const DWD_EVENTS = [
-  { key:'gewitter',           label:'Gewitter',         levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'sturm_orkan',        label:'Sturm / Orkan',    levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'starkregen',         label:'Starkregen',       levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'dauerregen',         label:'Dauerregen',       levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'hochwasser',         label:'Hochwasser',       levels:['🟡 Stufe 1','🟠 Stufe 2','🔴 Stufe 3','🟣 Stufe 4'] },
-  { key:'schnee_schneesturm', label:'Schnee / Sturm',   levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'glaette_frost',      label:'Glätte / Frost',   levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'tauwetter',          label:'Tauwetter',        levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'hitze',              label:'Hitze',            levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'nebel',              label:'Nebel',            levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
-  { key:'uv',                 label:'UV-Index',         levels:['🟡 Wetterwarnung','🟠 Markantes Wetter','🔴 Unwetter','🟣 Extremes Unwetter'] },
+  { key:'gewitter', label:'Gewitter', levels:[
+    {v:1,l:'🟡 Gewitter'},{v:2,l:'🟠 Starkes Gewitter'},{v:3,l:'🔴 Schweres Gewitter'},{v:4,l:'🟣 Extremes Gewitter'}] },
+  { key:'sturm_orkan', label:'Sturm / Orkan', levels:[
+    {v:1,l:'🟡 Windböen'},{v:2,l:'🟠 Sturmböen'},{v:3,l:'🔴 Orkanartige Böen / Orkanböen'},{v:4,l:'🟣 Extreme Orkanböen'}] },
+  { key:'starkregen', label:'Starkregen', levels:[
+    {v:2,l:'🟠 Starkregen'},{v:3,l:'🔴 Heftiger Starkregen'},{v:4,l:'🟣 Extrem heftiger Starkregen'}] },
+  { key:'dauerregen', label:'Dauerregen', levels:[
+    {v:2,l:'🟠 Dauerregen'},{v:3,l:'🔴 Ergiebiger Dauerregen'},{v:4,l:'🟣 Extrem ergiebiger Dauerregen'}] },
+  { key:'hochwasser', label:'Hochwasser', levels:[
+    {v:1,l:'🟡 Stufe 1'},{v:2,l:'🟠 Stufe 2'},{v:3,l:'🔴 Stufe 3'},{v:4,l:'🟣 Stufe 4'}] },
+  { key:'schnee_schneesturm', label:'Schnee / Schneeverwehung', levels:[
+    {v:1,l:'🟡 Leichter Schneefall'},{v:2,l:'🟠 Schneefall / Schneeverwehung'},{v:3,l:'🔴 Starker Schneefall / Schneesturm'},{v:4,l:'🟣 Extrem starker Schneefall'}] },
+  { key:'glaette_frost', label:'Glätte / Frost', levels:[
+    {v:1,l:'🟡 Frost / Glätte'},{v:2,l:'🟠 Strenger Frost / verbreitet Glätte'},{v:3,l:'🔴 Glatteis'}] },
+  { key:'tauwetter', label:'Tauwetter', levels:[
+    {v:2,l:'🟠 Tauwetter'},{v:3,l:'🔴 Starkes Tauwetter'}] },
+  { key:'hitze', label:'Hitze', levels:[
+    {v:2,l:'🟠 Starke Wärmebelastung'},{v:3,l:'🔴 Extreme Wärmebelastung'}] },
+  { key:'nebel', label:'Nebel', levels:[
+    {v:1,l:'🟡 Nebel'}] },
+  { key:'uv', label:'UV-Index', levels:[
+    {v:1,l:'🟡 Erhöhte UV-Intensität'}] },
 ];
+
+// Saved min_level may not exist for this event (old configs offered 1-4
+// everywhere): pick the lowest offered level >= saved, else the highest.
+function dwdPickLevel(ev, saved) {
+  const vs = ev.levels.map(x=>x.v);
+  const hit = vs.find(v=>v>=saved);
+  return hit ?? vs[vs.length-1];
+}
 
 // ── Tabs ──────────────────────────────────────────────────────────────
 function switchTab(name) {
@@ -861,12 +883,12 @@ function applyConfigToUI() {
 function renderDwdToggles() {
   const events=cfg.nina?.sources?.dwd?.events||{};
   document.getElementById('dwd-toggles').innerHTML=DWD_EVENTS.map(ev=>{
-    const ec=events[ev.key]||{}, enabled=ec.enabled??false, level=ec.min_level??2;
+    const ec=events[ev.key]||{}, enabled=ec.enabled??false, level=dwdPickLevel(ev, ec.min_level??2);
     return `<div class="toggle-row">
       <span class="toggle-label">${escHtml(ev.label)}</span>
       <div class="toggle-right">
         <select class="level-select" id="dwd-level-${ev.key}" ${!enabled?'disabled':''}>
-          ${ev.levels.map((l,i)=>`<option value="${i+1}"${level===i+1?' selected':''}>${escHtml(l)}</option>`).join('')}
+          ${ev.levels.map(x=>`<option value="${x.v}"${level===x.v?' selected':''}>${escHtml(x.l)}</option>`).join('')}
         </select>
         <label class="switch">
           <input type="checkbox" id="dwd-en-${ev.key}" ${enabled?'checked':''} onchange="onDwdToggle('${ev.key}')">

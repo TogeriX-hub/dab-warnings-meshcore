@@ -27,6 +27,7 @@ sudo apt install -y \
     libmp3lame-dev \
     pkg-config \
     zlib1g-dev \
+    xxd \
     logrotate
 
 # ── 2. RTL-SDR Kernel-Treiber blacklisten ────────────────────────────────────
