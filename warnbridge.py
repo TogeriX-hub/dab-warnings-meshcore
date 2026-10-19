@@ -8,7 +8,7 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from typing import Optional
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # welle-cli Watchdog: wie oft pro Stunde darf neu gestartet werden
 WELLE_RESTART_COOLDOWN_SECONDS = 120   # min. 2 Minuten zwischen Neustarts
+BROADCAST_HASH_TTL = timedelta(hours=24)  # Broadcast-Dedup: 24h nach letzter Sichtung
 WELLE_WATCHDOG_CHECK_INTERVAL = 5      # alle 5s prüfen ob Watchdog ausgelöst
 
 
@@ -107,7 +108,10 @@ class WarnBridge:
         )
         # In-Memory Cache für Broadcast-Dedup (verhindert gleiche Warnung mehrfach senden)
         # Wird bei Config-Reload geleert damit neue Kreise frisch prüfen können
-        self._broadcast_sent_hashes: set[str] = set()
+        # Hash → last time seen. Entries expire BROADCAST_HASH_TTL after the
+        # last sighting, so a recurring event weeks later is sent again
+        # (previously the set grew forever and blocked it until restart).
+        self._broadcast_sent_hashes: dict[str, datetime] = {}
 
         # Zähler für tatsächlich gesendete Mesh-Nachrichten (letzte 60 Minuten)
         # Unabhängig von Dedup – wird nur bei erfolgreichem mesh.send_warning() befüllt
@@ -273,12 +277,21 @@ class WarnBridge:
         except ValueError:
             return False
     def is_broadcast_duplicate(self, b_hash: str) -> bool:
-        """Prüft ob diese Warnung für diesen Kreis bereits gesendet wurde."""
-        return b_hash in self._broadcast_sent_hashes
+        """Prüft ob diese Warnung für diesen Kreis kürzlich gesendet wurde."""
+        now = datetime.now(timezone.utc)
+        # expired entries out
+        self._broadcast_sent_hashes = {
+            h: t for h, t in self._broadcast_sent_hashes.items()
+            if now - t < BROADCAST_HASH_TTL
+        }
+        if b_hash in self._broadcast_sent_hashes:
+            self._broadcast_sent_hashes[b_hash] = now  # still active → keep alive
+            return True
+        return False
 
     def mark_broadcast_seen(self, b_hash: str):
         """Markiert diese Warnung+Kreis-Kombination als gesendet."""
-        self._broadcast_sent_hashes.add(b_hash)
+        self._broadcast_sent_hashes[b_hash] = datetime.now(timezone.utc)
 
     def _prepare_for_broadcast(self, w: NormalizedWarning) -> NormalizedWarning:
         """

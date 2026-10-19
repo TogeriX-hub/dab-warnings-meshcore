@@ -257,19 +257,25 @@ class DabListener:
         mux_url = f"{self.welle_url}/mux.json"
         jl_url = f"{self.welle_url}/journaline.json"
 
-        mux_task = session.get(mux_url, timeout=REQUEST_TIMEOUT)
-        jl_task = session.get(jl_url, timeout=REQUEST_TIMEOUT)
-
-        async with mux_task as mux_resp, jl_task as jl_resp:
+        # Two separate requests. The old combined "async with a, b" left the
+        # second request coroutine un-awaited whenever the first one failed
+        # (welle-cli down) → "coroutine ClientSession._request was never awaited".
+        async with session.get(mux_url, timeout=REQUEST_TIMEOUT) as mux_resp:
             if mux_resp.status != 200:
                 raise ValueError(f"HTTP {mux_resp.status} von welle-cli (/mux.json)")
             mux_data = await mux_resp.json()
 
-            jl_data = None
-            if jl_resp.status == 200:
-                jl_data = await jl_resp.json()
-            elif jl_resp.status != 404:
-                logger.debug("DAB: /journaline.json HTTP %d", jl_resp.status)
+        jl_data = None
+        try:
+            async with session.get(jl_url, timeout=REQUEST_TIMEOUT) as jl_resp:
+                if jl_resp.status == 200:
+                    jl_data = await jl_resp.json()
+                elif jl_resp.status != 404:
+                    logger.debug("DAB: /journaline.json HTTP %d", jl_resp.status)
+        except Exception as e:
+            # Journaline is optional – a failure here must not count as
+            # welle-cli being down (mux.json already answered)
+            logger.debug("DAB: /journaline.json Fehler: %s", e)
 
         if self._error_count > 0:
             logger.info("DAB-Listener: welle-cli wieder erreichbar nach %d Fehlern",
