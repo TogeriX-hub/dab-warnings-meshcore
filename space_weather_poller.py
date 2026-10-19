@@ -18,7 +18,7 @@ Trigger-Logik:
 import asyncio
 import logging
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Awaitable, Optional
 
 import aiohttp
@@ -52,6 +52,17 @@ _PRODUCT_PROTON = {
 
 _G_TEXT = {1: "Minor", 2: "Moderate", 3: "Strong", 4: "Severe", 5: "Extreme"}
 _S_TEXT = {3: "Strong", 4: "Severe", 5: "Extreme"}
+_R_TEXT = {3: "Strong", 4: "Severe", 5: "Extreme"}
+
+# alerts.json keeps alerts for weeks. After a restart the in-memory seen-set
+# is empty, so old events would be sent again (issue #8: X1.0 flare from
+# June 3rd sent on June 21st). Anything older than this is ignored.
+_MAX_AGE = {
+    "xflare": timedelta(hours=3),     # radio blackout lasts ~1h
+    "geo":    timedelta(hours=24),
+    "watch":  timedelta(hours=72),    # watch covers the next 1-3 days
+    "proton": timedelta(hours=24),
+}
 
 
 def _sw_hash(identifier: str) -> str:
@@ -69,6 +80,22 @@ def _parse_noaa_dt(s: str) -> Optional[datetime]:
             return datetime.fromisoformat(s).astimezone(timezone.utc)
         except Exception:
             return None
+
+
+def _xray_r_level(xray_class: str) -> int:
+    """NOAA R-scale from an X-ray class: X1-X9.9 = R3, X10-X19.9 = R4, X20+ = R5."""
+    c = (xray_class or "").strip().upper()
+    if not c.startswith("X"):
+        return 0
+    try:
+        val = float(c[1:])
+    except ValueError:
+        return 3
+    if val >= 20:
+        return 5
+    if val >= 10:
+        return 4
+    return 3
 
 
 def _extract_field(message: str, field: str) -> str:
@@ -142,6 +169,7 @@ class SpaceWeatherPoller:
         self.rad_min_level = int(rad.get("min_level", 3))
         rbl = sw.get("radio_blackout", {})
         self.rbl_enabled = rbl.get("enabled", False)
+        self.rbl_min_level = int(rbl.get("min_level", 3))
 
     async def run(self):
         if not self.enabled:
@@ -304,35 +332,51 @@ class SpaceWeatherPoller:
 
     def _build_warning(self, product_id: str, message: str, issue_dt_str: str) -> Optional[NormalizedWarning]:
         now = datetime.now(timezone.utc)
-        issued_dt = now
+        issued_dt = None
         if issue_dt_str:
             try:
                 issued_dt = datetime.fromisoformat(issue_dt_str.replace(" ", "T")).replace(tzinfo=timezone.utc)
             except Exception:
-                pass
+                issued_dt = None
+        if issued_dt is None:
+            issued_dt = _parse_noaa_dt(_extract_field(message, "Issue Time"))
+        if issued_dt is None:
+            # without a timestamp we cannot tell how old it is – skip it
+            logger.debug("SpaceWeather: Alert ohne Zeitstempel ignoriert: %s", product_id)
+            return None
+
+        def too_old(kind: str) -> bool:
+            age = now - issued_dt
+            if age > _MAX_AGE[kind]:
+                logger.debug("SpaceWeather: %s Alert zu alt (%s) – ignoriert", product_id, age)
+                return True
+            return False
 
         # --- Geomagnetic Alert/Warning G3+ ---
         if product_id in _PRODUCT_G_LEVEL and self.geo_enabled:
             _, level = _PRODUCT_G_LEVEL[product_id]
-            if level < self.geo_min_level:
+            if level < self.geo_min_level or too_old("geo"):
                 return None
             return self._make_geo_alert(product_id, message, level, issued_dt, is_watch=False)
 
         # --- Geomagnetic Watch G3+ (1–3 Tage Vorlauf) ---
         if product_id in _PRODUCT_WATCH_LEVEL and self.geo_enabled and self.geo_watch_enabled:
             _, level = _PRODUCT_WATCH_LEVEL[product_id]
-            if level < self.geo_min_level:
+            if level < self.geo_min_level or too_old("watch"):
                 return None
             return self._make_geo_alert(product_id, message, level, issued_dt, is_watch=True)
 
         # --- X-Flare R3+ ---
         if product_id in _PRODUCT_XFLARE and self.rbl_enabled:
-            return self._make_xflare_alert(message, issued_dt)
+            r_level = _xray_r_level(_extract_field(message, "Xray Class") or "X1.0")
+            if r_level < self.rbl_min_level or too_old("xflare"):
+                return None
+            return self._make_xflare_alert(message, issued_dt, r_level)
 
         # --- Proton Event S3+ ---
         if product_id in _PRODUCT_PROTON and self.rad_enabled:
             _, level = _PRODUCT_PROTON[product_id]
-            if level < self.rad_min_level:
+            if level < self.rad_min_level or too_old("proton"):
                 return None
             return self._make_proton_alert(message, level, issued_dt)
 
@@ -400,20 +444,20 @@ class SpaceWeatherPoller:
             ags_codes=[],
             sent=issued_dt,
             effective=issued_dt,
-            expires=None,
+            expires=issued_dt + (_MAX_AGE["watch"] if is_watch else _MAX_AGE["geo"]),
             content_hash=content_hash,
         )
 
-    def _make_xflare_alert(self, message: str, issued_dt: datetime) -> NormalizedWarning:
+    def _make_xflare_alert(self, message: str, issued_dt: datetime, r_level: int = 3) -> NormalizedWarning:
         xray_class = _extract_field(message, "Xray Class") or "X1.0"
         serial = _extract_field(message, "Serial Number")
         begin = _extract_field(message, "Begin Time")
         identifier = f"sw-xflare-{serial}-{issued_dt.strftime('%Y%m%d%H%M')}"
 
-        headline = f"Weltraumwetter: Solar Flare {xray_class} (R3)"
-        desc = f"HF-Funk Ausfall ~1h auf Sonnenseite."
+        headline = f"Weltraumwetter: Solar Flare {xray_class} (R{r_level})"
+        desc = f"R{r_level} ({_R_TEXT.get(r_level, 'Strong')}). HF-Funk Ausfall ~1h auf Sonnenseite."
         if begin:
-            desc += f" Beginn: {begin} UTC"
+            desc += f" Beginn: {begin}"
 
         from cap_normalizer import make_hash_with_date
         content_hash = make_hash_with_date(headline, issued_dt.isoformat())
@@ -432,7 +476,7 @@ class SpaceWeatherPoller:
             ags_codes=[],
             sent=issued_dt,
             effective=issued_dt,
-            expires=None,
+            expires=issued_dt + _MAX_AGE["xflare"],
             content_hash=content_hash,
         )
 
@@ -461,6 +505,6 @@ class SpaceWeatherPoller:
             ags_codes=[],
             sent=issued_dt,
             effective=issued_dt,
-            expires=None,
+            expires=issued_dt + _MAX_AGE["proton"],
             content_hash=content_hash,
         )
