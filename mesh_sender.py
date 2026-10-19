@@ -9,6 +9,7 @@ Im Produktivmodus:
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional, Callable, Awaitable
 
@@ -29,6 +30,11 @@ MSG_LIMIT = 120
 HEALTH_CHECK_INTERVAL = 120     # seconds between checks
 HEALTH_CHECK_TIMEOUT = 10       # seconds to wait for the node's answer
 LISTEN_TIMEOUT = 60             # wake up the receive loop regularly
+# The ESP32 has no battery-backed clock: after a reboot it starts at a wrong
+# time and every channel message carries that timestamp (apps sort them into
+# the past). WarnBridge sets the node clock from the Pi on connect and
+# corrects it during health checks when it drifts more than this.
+CLOCK_MAX_DRIFT = 30            # seconds
 
 
 def _trunc(text: str, max_len: int) -> str:
@@ -196,7 +202,28 @@ class MeshSender:
             self._connected_since = datetime.now(timezone.utc).isoformat()
             self._mark_ok()
             logger.info("MeshCore verbunden: %s:%d", self.host, self.port)
+            await self._sync_clock(force=True)
             await self._set_scope()
+
+    async def _sync_clock(self, force: bool = False, node_time: Optional[int] = None):
+        """Set the node clock to the Pi's time (force, or when drift is too big)."""
+        if self._mc is None:
+            return
+        now = int(time.time())
+        if not force and node_time is not None and abs(node_time - now) <= CLOCK_MAX_DRIFT:
+            return
+        try:
+            res = await self._mc.commands.set_time(now)
+            if res is not None and res.type != EventType.ERROR:
+                if node_time is not None:
+                    logger.info("MeshCore Uhr korrigiert (Abweichung %ds)", node_time - now)
+                else:
+                    logger.info("MeshCore Uhr gesetzt")
+            else:
+                logger.warning("MeshCore Uhr setzen fehlgeschlagen: %s",
+                               getattr(res, "payload", None))
+        except Exception as e:
+            logger.warning("MeshCore Uhr setzen fehlgeschlagen: %s", e)
 
     async def _set_scope(self):
         if self._mc is None:
@@ -229,6 +256,11 @@ class MeshSender:
             return False
 
         self._mark_ok()
+        try:
+            node_time = int((res.payload or {}).get("time", 0))
+            await self._sync_clock(node_time=node_time)
+        except Exception as e:
+            logger.debug("Uhr-Check fehlgeschlagen: %s", e)
         return True
 
     async def _health_loop(self):
