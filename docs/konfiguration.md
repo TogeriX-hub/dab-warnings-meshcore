@@ -13,11 +13,21 @@ meshcore:
   simulator: false        # true = Simulator-Modus (Mac-Entwicklung)
   channel_idx: 0          # MeshCore-Kanal (0–7)
   scope: 'de-bw-str'      # * = Flood (ganzes Mesh), #Name = regionaler Scope
+  bot_enabled: true       # Bot-Befehle (/status, /help …) im Kanal beantworten
 ```
 
 **Simulator-Modus** (`simulator: true`): Alle Nachrichten erscheinen im Dashboard statt ins Mesh gesendet zu werden. Für Mac-Entwicklung ohne Heltec.
 
 **Scope**: Mit MeshCore-Firmware ab v1.10.0 kann ein regionaler Scope gesetzt werden. `*` flutet das gesamte Mesh.
+
+**channel_idx vs. scope**: `channel_idx` ist der Kanal-Slot im Companion-Node (Name + Schlüssel sind dort hinterlegt). `scope` ist die Region für das Flood-Routing – kein Kanal.
+
+**Bot-Befehle** (`/details [n]`, `/warnings [Ort]`, `/status`, `/swdetails`, `/help`):
+- werden nur aus Kanalnachrichten im Slot `channel_idx` angenommen, nicht per Direktnachricht
+- der Befehl muss am Anfang der Nachricht stehen (`/status` oder `Name: /status`)
+- Antworten gehen öffentlich in denselben Kanal, max. 120 Zeichen pro Nachricht, 10 s Abstand bei mehrteiligen Antworten
+- abschalten: `bot_enabled: false` (Dashboard → Konfiguration → Bot-Befehle) oder ohne Neustart per Datei `touch bot_off` im Programmordner (`rm bot_off` schaltet wieder ein). Empfohlen, wenn zwei WarnBridge-Instanzen im selben Kanal laufen – sonst können sich die Bots gegenseitig auslösen.
+- Voraussetzung: meshcore-Library mit `start_auto_message_fetching()`; beim Verbinden steht im Log `MeshCore: Auto-Message-Fetching aktiv`.
 
 ---
 

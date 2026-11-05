@@ -213,6 +213,20 @@ class MeshSender:
             except Exception as e:
                 logger.debug("DISCONNECTED-Subscription fehlgeschlagen: %s", e)
 
+            # Eingehende Nachrichten automatisch vom Node abholen.
+            # Der Companion puffert empfangene Nachrichten und meldet nur
+            # "Nachrichten warten" – ohne Abholen erzeugt die meshcore-Library
+            # kein CHANNEL_MSG_RECV und listen_loop() sieht nie einen Bot-Befehl.
+            if hasattr(mc, "start_auto_message_fetching"):
+                try:
+                    await mc.start_auto_message_fetching()
+                    logger.info("MeshCore: Auto-Message-Fetching aktiv")
+                except Exception as e:
+                    logger.error("MeshCore: Auto-Message-Fetching fehlgeschlagen: %s", e)
+            else:
+                logger.warning("MeshCore: Library ohne start_auto_message_fetching() – "
+                               "Bot-Befehle werden nicht empfangen (meshcore aktualisieren)")
+
             self._connected = True
             self._connected_since = datetime.now(timezone.utc).isoformat()
             self._mark_ok()

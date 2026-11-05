@@ -258,6 +258,17 @@ class WebUI:
         from cap_normalizer import NormalizedWarning
 
         now = datetime.now(timezone.utc)
+
+        # Testgebiet aus den eigenen broadcast_districts ableiten – sonst
+        # verwirft der Broadcast-Filter die Testwarnung still ("kein Broadcast"),
+        # sobald jemand andere Kreise als den Beispiel-Default konfiguriert.
+        import ags_lookup
+        districts = [str(d).strip() for d in
+                     (self.config.get("nina", {}).get("broadcast_districts") or [])]
+        districts = [d for d in districts if d] or ["08115", "08111"]
+        names = [ags_lookup.district_name(d) for d in districts[:3]]
+        test_area = ", ".join(names)
+
         w = NormalizedWarning(
             source=warn_type if warn_type in ("dab", "mowas", "dwd") else "mowas",
             identifier=f"test-{warn_type}-{int(now.timestamp())}",
@@ -268,8 +279,8 @@ class WebUI:
             headline=f"[TEST] Hochwasser Neckar – Stufe 2",
             description="Dies ist eine Testwarnung ausgelöst über das WarnBridge-Dashboard. Keine reale Gefahr.",
             instruction="Uferbereich meiden (Test).",
-            area_desc="Böblingen, Stuttgart",
-            ags_codes=["08115", "08111"],
+            area_desc=test_area,
+            ags_codes=districts,
             sent=now,
             effective=now,
             expires=None,
