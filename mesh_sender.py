@@ -29,7 +29,18 @@ MSG_LIMIT = 120
 # because send_chan_msg() returns an ERROR event instead of raising.
 HEALTH_CHECK_INTERVAL = 120     # seconds between checks
 HEALTH_CHECK_TIMEOUT = 10       # seconds to wait for the node's answer
-LISTEN_TIMEOUT = 60             # wake up the receive loop regularly
+# Bot commands are collected by a permanent subscription into a queue and
+# answered one after another. A multi-part reply takes ~30 s – commands that
+# arrive meanwhile wait in the queue instead of getting lost.
+CMD_QUEUE_MAX = 20
+# After a (re)connect the node hands over everything it buffered while
+# WarnBridge was away. Commands from that backlog older than CMD_BACKLOG_MAX_AGE
+# are skipped, so nobody gets an answer to a /status from hours ago. Only the
+# first CMD_BACKLOG_WINDOW seconds after connecting are checked – live commands
+# are always answered, even from senders whose clock is off.
+CMD_BACKLOG_WINDOW = 60         # seconds after connect
+CMD_BACKLOG_MAX_AGE = 5 * 60    # seconds
+CMD_MARKERS = ("/swdetails", "/details", "/warnings", "/status", "/help")
 # The ESP32 has no battery-backed clock: after a reboot it starts at a wrong
 # time and every channel message carries that timestamp (apps sort them into
 # the past). WarnBridge sets the node clock from the Pi on connect and
@@ -137,6 +148,8 @@ class MeshSender:
         self._verify_tasks: set[asyncio.Task] = set()
         # messages lost to a TX hang, sent once more after the node is back
         self._resend_queue: list[tuple[str, str]] = []
+        self._cmd_queue: asyncio.Queue = asyncio.Queue(maxsize=CMD_QUEUE_MAX)
+        self._connected_at: float = 0.0
 
     def set_ws_broadcast(self, fn: WsBroadcastType):
         self._ws_broadcast = fn
@@ -212,6 +225,14 @@ class MeshSender:
                 mc.subscribe(EventType.DISCONNECTED, self._on_lib_disconnect)
             except Exception as e:
                 logger.debug("DISCONNECTED-Subscription fehlgeschlagen: %s", e)
+
+            # Subscribe before auto fetching starts – the first fetch hands
+            # over buffered messages right away.
+            self._connected_at = time.time()
+            try:
+                mc.subscribe(EventType.CHANNEL_MSG_RECV, self._on_channel_msg)
+            except Exception as e:
+                logger.error("MeshCore: CHANNEL_MSG_RECV-Subscription fehlgeschlagen: %s", e)
 
             # Eingehende Nachrichten automatisch vom Node abholen.
             # Der Companion puffert empfangene Nachrichten und meldet nur
@@ -413,12 +434,57 @@ class MeshSender:
                 self._health_loop(), name="mesh_health"
             )
 
+    @staticmethod
+    def _extract_command(text: str) -> Optional[str]:
+        """
+        A command only counts when the marker is at the start of the message,
+        either directly or after a short sender prefix ("Name: /cmd"). Warnings
+        from other bots that happen to end in "/warnings" are ignored.
+        """
+        stripped = text.strip()
+        lower = stripped.lower()
+        for marker in CMD_MARKERS:
+            if lower.startswith(marker):
+                return stripped
+            colon_pos = lower.find(": " + marker)
+            if colon_pos != -1 and colon_pos <= 50:
+                return stripped[colon_pos + 2:].strip()
+        return None
+
+    async def _on_channel_msg(self, event):
+        """Called by the library for every channel message, also while a reply is going out."""
+        try:
+            payload = event.payload or {}
+        except Exception:
+            return
+        self._mark_ok()
+
+        if payload.get("channel_idx", -1) != self.channel_idx:
+            return
+        cmd = self._extract_command(payload.get("text", "") or "")
+        if not cmd:
+            return
+
+        now = time.time()
+        sent_at = int(payload.get("sender_timestamp") or 0)
+        in_backlog_window = now - self._connected_at < CMD_BACKLOG_WINDOW
+        clock_plausible = sent_at > 1_700_000_000  # sender clock set at all
+        if in_backlog_window and clock_plausible and now - sent_at > CMD_BACKLOG_MAX_AGE:
+            logger.info("MeshCore alter Befehl übersprungen (vor %d min gesendet): %s",
+                        int((now - sent_at) / 60), cmd)
+            return
+
+        try:
+            self._cmd_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            logger.warning("MeshCore Befehl verworfen (Warteschlange voll): %s", cmd)
+
     async def listen_loop(self, on_command: Callable[[str], Awaitable[None]]):
         """
-        Empfängt eingehende MeshCore-Nachrichten und leitet Bot-Befehle weiter.
-        wait_for_event() bekommt ein Timeout, damit der Loop nach einem Reconnect
-        auf die neue MeshCore-Instanz wechselt statt ewig auf der alten zu warten.
-        Im Simulator-Modus: schläft ewig – Befehle kommen vom Dashboard per WebSocket.
+        Answers bot commands one after another from the queue that
+        _on_channel_msg fills. Errors in a reply are logged but don't touch the
+        connection – reconnecting is done by warnbridge._mesh_reconnect_loop.
+        In simulator mode commands come from the dashboard via WebSocket.
         """
         if self.simulator:
             await asyncio.Event().wait()
@@ -428,52 +494,16 @@ class MeshSender:
 
         while True:
             try:
-                mc = self._mc
-                if not self._connected or mc is None:
-                    await asyncio.sleep(5)
-                    continue
-
-                event = await mc.wait_for_event(EventType.CHANNEL_MSG_RECV,
-                                                timeout=LISTEN_TIMEOUT)
-                if event is None:
-                    continue
-
-                self._mark_ok()
-                text = event.payload.get("text", "").strip()
-                channel = event.payload.get("channel_idx", -1)
-
-                if channel != self.channel_idx:
-                    continue
-
-                # Ein Befehl ist nur gültig wenn der Marker am Anfang der Nachricht
-                # steht (direkt oder nach kurzem Absender-Präfix "Name: /cmd").
-                # Damit werden Warnmeldungen ignoriert, die zufällig mit "/warnings"
-                # enden (z.B. weil ein anderer Bot das als Suffix anhängt).
-                cmd = None
-                stripped = text.strip()
-                lower_stripped = stripped.lower()
-                for marker in ("/swdetails", "/details", "/warnings", "/status", "/help"):
-                    if lower_stripped.startswith(marker):
-                        # Direkt als Befehl: "/warnings" oder "/warnings Rosenheim"
-                        cmd = stripped
-                        break
-                    # "NodeName: /befehl" – Absenderpräfix max. 50 Zeichen
-                    colon_pos = lower_stripped.find(": " + marker)
-                    if colon_pos != -1 and colon_pos <= 50:
-                        cmd = stripped[colon_pos + 2:].strip()
-                        break
-
-                if cmd:
-                    logger.info("MeshCore Befehl empfangen: %s", cmd)
-                    await on_command(cmd)
-
+                cmd = await self._cmd_queue.get()
+            except asyncio.CancelledError:
+                break
+            logger.info("MeshCore Befehl empfangen: %s", cmd)
+            try:
+                await on_command(cmd)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("MeshCore receive Fehler: %s", e)
-                self._mark_disconnected(f"receive: {e}")
-                await asyncio.sleep(10)
-                # reconnect is done by warnbridge._mesh_reconnect_loop
+                logger.error("MeshCore Bot-Antwort fehlgeschlagen (%s): %s", cmd, e)
 
     # ── send ─────────────────────────────────────────────────────────
 
