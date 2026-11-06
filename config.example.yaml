@@ -1,0 +1,62 @@
+# WarnBridge – Vorlage für die Konfiguration
+#
+# Diese Datei ist nur die Vorlage. Beim ersten Start legt WarnBridge daraus
+# config.yaml an. Deine eigene config.yaml ist nicht Teil des Repos und wird
+# bei Updates nie überschrieben. Die meisten Einstellungen änderst du am
+# einfachsten im Dashboard unter Konfiguration.
+# Alle Optionen erklärt: docs/konfiguration.md
+
+meshcore:
+  host: 192.168.4.1       # IP des Heltec im Pi-WLAN
+  port: 4403              # Heltec mit MeshCore-WLAN-Firmware: meist 5000
+  channel_idx: 0          # MeshCore-Kanal 0–7
+  scope: '*'              # * = ganzes Mesh, #Region = regionaler Scope (ab Firmware 1.10)
+  simulator: true         # true = Nachrichten nur im Dashboard, false = echtes Mesh
+  bot_enabled: true       # /status, /help … im Kanal beantworten
+
+dab:
+  welle_cli_url: http://localhost:7979
+  welle_cli_path: ''      # leer = automatisch suchen
+  channel: 9D             # DAB+-Kanal, z.B. 9D für SWR BW Nord
+  asa_geocode: ''         # optional: eigener ASA-Standortcode (asa.radio), leer = kein Filter
+  forward_tests: false    # Probewarnungen ins Mesh senden?
+
+nina:
+  poll_interval_minutes: 15
+  region_state: ''        # leer = Einrichtung beim ersten Start im Dashboard
+  broadcast_districts: [] # Landkreise, die automatisch ins Mesh gehen (AGS, z.B. '08111')
+  sources:
+    mowas:
+      enabled: true
+      min_severity: Severe
+    dwd:
+      enabled: true
+      events:
+        gewitter:           { enabled: true,  min_level: 2 }
+        sturm_orkan:        { enabled: true,  min_level: 2 }
+        starkregen:         { enabled: true,  min_level: 3 }
+        dauerregen:         { enabled: true,  min_level: 2 }
+        hochwasser:         { enabled: true,  min_level: 1 }
+        schnee_schneesturm: { enabled: true,  min_level: 2 }
+        glaette_frost:      { enabled: false, min_level: 3 }
+        tauwetter:          { enabled: false, min_level: 2 }
+        hitze:              { enabled: false, min_level: 2 }
+        uv:                 { enabled: false, min_level: 3 }
+        nebel:              { enabled: false, min_level: 3 }
+    lhp:
+      enabled: false
+
+space_weather:
+  enabled: true
+  poll_interval_minutes: 15
+  geomagnetic:     { enabled: true, min_level: 4, watch_enabled: true }
+  radio_blackout:  { enabled: true, min_level: 4 }
+  solar_radiation: { enabled: true, min_level: 4 }
+
+dedup:
+  id_cache_ttl_hours: 24
+  content_hash: true
+  max_per_hour: 5
+
+warnings_db:
+  ttl_hours: 48

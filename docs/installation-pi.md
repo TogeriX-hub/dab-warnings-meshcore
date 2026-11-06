@@ -187,6 +187,8 @@ cat /var/lib/misc/dnsmasq.leases
 
 ### 4.2 config.yaml anpassen
 
+`install_pi.sh` hat `config.yaml` aus der Vorlage `config.example.yaml` angelegt. Die Datei gehört nicht zum Repo und wird bei Updates nicht überschrieben.
+
 ```bash
 nano ~/dab-warnings-meshcore/config.yaml
 ```
@@ -262,4 +264,6 @@ Port in `config.yaml` muss `5000` sein (meshcomod), nicht `4403`.
 | Dashboard | `http://warnbridge.local:8080` |
 | Dongle testen | `rtl_test -t` |
 | Heltec IP | `cat /var/lib/misc/dnsmasq.leases` |
-| Repo aktualisieren | `cd ~/dab-warnings-meshcore && git pull && sudo systemctl restart warnbridge` |
+| WarnBridge aktualisieren | `cd ~/dab-warnings-meshcore && ./update.sh` |
+| Nur prüfen, ob es Neues gibt | `cd ~/dab-warnings-meshcore && ./update.sh --check` |
+| Installierte Version | `cd ~/dab-warnings-meshcore && python3 version.py` |

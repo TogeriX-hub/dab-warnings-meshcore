@@ -280,6 +280,7 @@
     <div class="logo">WARNBRIDGE</div>
     <div class="sep">|</div>
     <div class="subtitle">DAB+ → MeshCore</div>
+    <div class="subtitle" id="app-version" title="Version – bei Fehlermeldungen bitte angeben"></div>
     <div id="sim-badge">SIMULATOR</div>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
@@ -704,6 +705,7 @@ function applyStatus(s) {
   else if(mesh.connected){meshEl.textContent='Verbunden';meshEl.className='stat-value ok';}
   else{meshEl.textContent='Getrennt';meshEl.className='stat-value err';}
   setText('st-uptime',s.uptime_human||'–');
+  if(s.version) setText('app-version',s.version);
   setText('st-warnings',(s.db||{}).active_warnings??'–');
   setText('st-dedup',`${(s.dedup||{}).cached_ids||0} IDs`);
   setText('st-sent',`${(s.dedup||{}).sent_last_hour||0} / ${(s.dedup||{}).max_per_hour||5}`);

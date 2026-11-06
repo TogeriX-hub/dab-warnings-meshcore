@@ -94,6 +94,45 @@ bash install.sh
 python3 warnbridge.py
 ```
 
+Deine Einstellungen landen in `config.yaml`. Die Datei legt WarnBridge beim ersten Start aus der Vorlage `config.example.yaml` an. Sie gehört nicht zum Repo, Updates lassen sie deshalb in Ruhe.
+
+## Aktualisieren
+
+WarnBridge hat keine Download-Dateien. Installiert ist ein Git-Checkout, und ein Update holt einfach den neuen Stand von GitHub:
+
+```bash
+cd ~/dab-warnings-meshcore
+./update.sh
+```
+
+Das Skript zeigt, was neu ist, baut welle-cli neu, falls sich der DAB+-Decoder geändert hat, und startet den Dienst neu. Mit `./update.sh --check` siehst du nur, ob es etwas Neues gibt. Was sich in jeder Version geändert hat, steht im [CHANGELOG](CHANGELOG.md).
+
+Wer nicht immer den neuesten Stand will, bleibt auf einer Version: `git checkout v1.4.0`.
+
+> **Einmalig beim Umstieg auf 1.4.0:** Bis 1.3.0 war `config.yaml` Teil des Repos. Ein normales `git pull` bricht dann ab, sobald du im Dashboard etwas eingestellt hast. So geht der Umstieg, ohne dass deine Einstellungen verloren gehen:
+>
+> ```bash
+> cd ~/dab-warnings-meshcore
+> cp config.yaml ~/config.yaml.backup
+> git fetch --tags && git reset --hard origin/main
+> cp ~/config.yaml.backup config.yaml
+> sudo systemctl restart warnbridge
+> ```
+>
+> `git reset --hard` setzt alle Dateien aus dem Repo auf den Stand von GitHub. Datenbank, Logs und deine gesicherte `config.yaml` bleiben erhalten. Danach genügt für jedes Update `./update.sh`.
+
+## Welche Version läuft?
+
+Die Version steht im Dashboard oben neben dem Logo und in der Antwort auf `/help`, im Terminal zeigt sie `python3 version.py`. Sie sieht zum Beispiel so aus:
+
+| Anzeige | Bedeutung |
+|---|---|
+| `v1.4.0` | genau diese Version |
+| `v1.4.0-3-g2195978` | drei Änderungen nach 1.4.0, Stand `2195978` |
+| `…-dirty` | Dateien aus dem Repo wurden auf diesem Gerät geändert |
+
+Bei Fehlerberichten bitte immer die Version angeben.
+
 ## Stand
 
 Meine WarnBridge läuft seit Sommer 2026 im Dauerbetrieb. Am bundesweiten Warntag (10.09.2026) kamen Probewarnung und Entwarnung pünktlich im Mesh an – über NINA. Unwetterwarnungen des DWD gehen seit dem Sommer zuverlässig raus.

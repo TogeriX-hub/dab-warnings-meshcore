@@ -24,6 +24,7 @@ from bot_handler import BotHandler
 from dab_listener import DabListener
 from space_weather_poller import SpaceWeatherPoller
 import ags_lookup
+from version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -450,7 +451,7 @@ class WarnBridge:
                         s.sendall(b"WATCHDOG=1")
 
     async def start(self):
-        logger.info("WarnBridge startet...")
+        logger.info("WarnBridge %s startet...", get_version())
 
         # AGS-Lookup laden (einmalig, cached lokal)
         await asyncio.get_event_loop().run_in_executor(None, ags_lookup.load)
@@ -602,6 +603,7 @@ class WarnBridge:
             if (now_ts - t).total_seconds() < 3600
         ]
         return {
+            "version": get_version(),
             "uptime_seconds": uptime_seconds,
             "uptime_human": _format_uptime(uptime_seconds),
             "mesh_sent_1h": len(self._mesh_sent_timestamps),
@@ -633,9 +635,17 @@ async def main():
     setup_logging("INFO")
 
     config_path = "config.yaml"
+    example_path = "config.example.yaml"
     if not Path(config_path).exists():
-        logger.error("config.yaml nicht gefunden!")
-        sys.exit(1)
+        # config.yaml is not part of the repo, so updates never touch it.
+        # On the very first start it is created from the template.
+        if Path(example_path).exists():
+            import shutil
+            shutil.copyfile(example_path, config_path)
+            logger.info("config.yaml aus config.example.yaml angelegt")
+        else:
+            logger.error("config.yaml nicht gefunden (und keine config.example.yaml)!")
+            sys.exit(1)
 
     config = load_config(config_path)
     app = WarnBridge(config)

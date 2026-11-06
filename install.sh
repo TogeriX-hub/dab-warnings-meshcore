@@ -39,6 +39,12 @@ cd "$SCRIPT_DIR"
 echo "→ Installiere Python-Pakete..."
 pip3 install --break-system-packages -r requirements.txt
 
+# config.yaml is not part of the repo – create it from the template once
+if [ ! -f "$SCRIPT_DIR/config.yaml" ]; then
+    cp "$SCRIPT_DIR/config.example.yaml" "$SCRIPT_DIR/config.yaml"
+    echo "→ config.yaml aus config.example.yaml angelegt"
+fi
+
 echo ""
 echo "✓ Installation abgeschlossen."
 echo ""

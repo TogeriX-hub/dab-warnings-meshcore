@@ -1,6 +1,6 @@
 # Konfiguration – config.yaml
 
-Alle Einstellungen werden in `config.yaml` im Repo-Root gespeichert. Änderungen können im Dashboard (Konfiguration-Tab) vorgenommen werden und werden sofort ohne Neustart übernommen.
+Alle Einstellungen werden in `config.yaml` im Repo-Root gespeichert. Die Datei gehört nicht zum Repo: WarnBridge legt sie beim ersten Start aus `config.example.yaml` an, Updates lassen sie unverändert. Änderungen können im Dashboard (Konfiguration-Tab) vorgenommen werden und werden sofort ohne Neustart übernommen.
 
 ---
 

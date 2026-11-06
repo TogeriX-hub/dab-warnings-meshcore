@@ -114,6 +114,12 @@ sed "s|/home/pi|/home/$CURRENT_USER|g" "$LOGROTATE_SRC" > "$LOGROTATE_TMP"
 sudo cp "$LOGROTATE_TMP" /etc/logrotate.d/warnbridge
 echo "    logrotate eingerichtet (täglich, 7 Tage aufbewahren)."
 
+# config.yaml is not part of the repo – create it from the template once
+if [ ! -f "$REPO_DIR/config.yaml" ]; then
+    cp "$REPO_DIR/config.example.yaml" "$REPO_DIR/config.yaml"
+    echo "config.yaml aus config.example.yaml angelegt."
+fi
+
 # ── Abschluss ─────────────────────────────────────────────────────────────────
 echo ""
 echo "=== Setup abgeschlossen ==="

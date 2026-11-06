@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Callable, Awaitable, TYPE_CHECKING
 import ags_lookup
+from version import get_version
 
 if TYPE_CHECKING:
     from warnbridge import WarnBridge
@@ -222,7 +223,7 @@ class BotHandler:
     # /help – 1 Nachricht
     # ------------------------------------------------------------------
     async def _cmd_help(self, send: SendFn):
-        await send("/details [n] /warnings [Ort] /swdetails /status – WarnBridge")
+        await send(_trunc(f"/details [n] /warnings [Ort] /swdetails /status – WarnBridge {get_version()}"))
 
 
 # ------------------------------------------------------------------

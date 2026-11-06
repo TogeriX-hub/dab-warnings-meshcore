@@ -1,13 +1,13 @@
-warnbridge.db
-__pycache__/dab_listener.cpython-313.pyc
-__pycache__/dab_listener.cpython-313.pyc
-.DS_Store
-__pycache__/dab_listener.cpython-313.pyc
+# Local settings and data – never part of the repo, so updates don't touch them
 config.yaml
 warnbridge.db
-.DS_Store
-__pycache__/dedup.cpython-313.pyc
-/__pycache__
-*.pyc
-*.pyc
+ags_cache.json
 bot_off
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
