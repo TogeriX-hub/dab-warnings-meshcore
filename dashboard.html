@@ -728,10 +728,29 @@ function applyStatus(s) {
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
 
 // ── Warnings ──────────────────────────────────────────────────────────
+// The list is polled every 10 s. To keep expanded cards, the scroll position
+// and a text selection intact, it is only redrawn when the data changed, and
+// open cards are remembered by warning ID instead of by position.
+const openWarnings = new Set();
+let warnKeys = [];
+let lastWarningsJson = null;
+
+function userIsSelectingIn(el) {
+  const sel = window.getSelection();
+  return !!(sel && !sel.isCollapsed && sel.anchorNode && el.contains(sel.anchorNode));
+}
+
 function renderWarnings(warnings) {
   const container=document.getElementById('warnings-list');
   document.getElementById('warnings-title').textContent=`Warnungen (48h) – ${warnings.length}`;
+  const json = JSON.stringify(warnings);
+  if (json === lastWarningsJson) return;
+  if (lastWarningsJson !== null && userIsSelectingIn(container)) return;  // try again next poll
+  lastWarningsJson = json;
+  warnKeys = warnings.map((w,i) => w.identifier || `idx-${i}`);
+  for (const k of [...openWarnings]) if (!warnKeys.includes(k)) openWarnings.delete(k);
   if(!warnings.length){container.innerHTML=`<div class="empty-state"><div class="icon">📡</div>Keine Warnungen in den letzten 48h</div>`;return;}
+  const scroll = container.scrollTop;
   container.innerHTML=warnings.map((w,i)=>`
     <div class="warn-card ${escHtml(w.severity||'Minor')}">
       <div class="warn-header" onclick="toggleCard(${i})">
@@ -742,7 +761,7 @@ function renderWarnings(warnings) {
         <span class="warn-time">${w.stored_at?new Date(w.stored_at).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):''}</span>
         <span style="color:var(--muted);font-size:10px;margin-left:4px">▾</span>
       </div>
-      <div class="warn-body" id="wbody-${i}">
+      <div class="warn-body${openWarnings.has(warnKeys[i])?' open':''}" id="wbody-${i}">
         <div class="warn-field"><div class="warn-field-label">Gebiet</div><div class="warn-field-value">${escHtml(w.area_desc||'–')}</div></div>
         ${w.ags_codes&&w.ags_codes.length?`<div class="warn-field"><div class="warn-field-label">Betroffene Kreise</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px">${escHtml(w.ags_codes.join(', '))}</div></div>`:''}
         ${w.dwd_event_type?`<div class="warn-field"><div class="warn-field-label">Ereignis</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px;color:var(--blue)">${escHtml(w.dwd_event_type)} (Level ${w.dwd_level||'–'})</div></div>`:''}
@@ -751,8 +770,14 @@ function renderWarnings(warnings) {
         <div class="warn-field"><div class="warn-field-label">ID</div><div class="warn-field-value" style="font-family:var(--mono);font-size:10px;color:var(--muted)">${escHtml(w.identifier||'–')}</div></div>
       </div>
     </div>`).join('');
+  container.scrollTop = scroll;
 }
-function toggleCard(i){document.getElementById(`wbody-${i}`)?.classList.toggle('open');}
+function toggleCard(i){
+  const body = document.getElementById(`wbody-${i}`);
+  if (!body) return;
+  const key = warnKeys[i];
+  if (body.classList.toggle('open')) openWarnings.add(key); else openWarnings.delete(key);
+}
 
 // ── Simulator ─────────────────────────────────────────────────────────
 function renderSent(msgs) {
@@ -1083,6 +1108,7 @@ async function saveConfig() {
 }
 
 // ── RxLog (versteckt) ─────────────────────────────────────────────────
+let lastRxLogJson = null;
 async function loadRxLog() {
   try {
     const r = await fetch('/api/rxlog');
@@ -1090,6 +1116,12 @@ async function loadRxLog() {
     const entries = await r.json();
     document.getElementById('rxlog-count').textContent = entries.length;
     const wrap = document.getElementById('rxlog-table-wrap');
+    const json = JSON.stringify(entries);
+    if (json === lastRxLogJson) return;
+    if (lastRxLogJson !== null && userIsSelectingIn(wrap)) return;
+    lastRxLogJson = json;
+    const scroller = wrap.parentElement;
+    const scroll = scroller.scrollTop;
     if (!entries.length) {
       wrap.innerHTML = '<div class="empty-state"><div class="icon">📦</div>Keine Pakete empfangen</div>';
       return;
@@ -1109,6 +1141,7 @@ async function loadRxLog() {
         <td style="color:var(--muted)">${escHtml((e.body||'').substring(0,120))}${(e.body||'').length>120?'…':''}</td>
       </tr>`).join('')}</tbody>
     </table>`;
+    scroller.scrollTop = scroll;
   } catch(e) {}
 }
 

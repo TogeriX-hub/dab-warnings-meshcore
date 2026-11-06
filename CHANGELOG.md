@@ -8,6 +8,13 @@ Die Versionen bis einschließlich 1.3.0 wurden im November 2026 nachträglich ve
 
 ---
 
+## 1.4.1
+
+*6. November 2026*
+
+**Behoben**
+- Dashboard: Die automatische Aktualisierung alle 10 Sekunden klappt aufgeklappte Warnungen nicht mehr zu. Scroll-Position und markierter Text bleiben erhalten, neu gezeichnet wird nur, wenn sich wirklich etwas geändert hat. Dasselbe gilt für das RxLog
+
 ## 1.4.0 – Bot-Empfang, neuer Auftritt, Updates per Skript
 
 *6. November 2026*
