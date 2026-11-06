@@ -178,9 +178,12 @@ class WarnBridge:
             else:
                 import hashlib as _hl
                 broadcast_hash = f"{w.headline.lower()}|{w_send.area_desc}"
-                if is_test:
-                    # Jede Testwarnung ist eigenständig (eindeutiger identifier),
-                    # sonst kommt der Testbutton nur einmal pro TTL-Fenster durch.
+                if is_test and w.identifier.startswith("test-"):
+                    # Dashboard test button: every click is its own warning,
+                    # otherwise only the first one per TTL window gets through.
+                    # Only for dashboard tests – DAB test alerts (e.g. the 5C
+                    # loop every 5 min) must stay deduped, or they would eat
+                    # the hourly rate limit and block real warnings.
                     broadcast_hash += f"|{w.identifier}"
                 b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
                 if self.is_broadcast_duplicate(b_hash):
