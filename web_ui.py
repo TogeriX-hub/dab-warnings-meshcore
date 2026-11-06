@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
+# Fonts and other files for the dashboard – served locally so it looks the same without internet
+STATIC_PATH = Path(__file__).parent / "static"
 
 
 class WebUI:
@@ -41,6 +43,8 @@ class WebUI:
         aio_app.router.add_get("/", self._handle_index)
         aio_app.router.add_get("/dashboard.html", self._handle_index)
         aio_app.router.add_get("/ws", self._handle_ws)
+        if STATIC_PATH.is_dir():
+            aio_app.router.add_static("/static/", STATIC_PATH)
         aio_app.router.add_get("/api/status", self._api_status)
         aio_app.router.add_get("/api/warnings", self._api_warnings)
         aio_app.router.add_get("/api/sent", self._api_sent)

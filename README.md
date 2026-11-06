@@ -54,11 +54,17 @@ Die Antworten gehen in denselben Kanal, also für alle sichtbar. Der Bot lässt 
 
 ## Dashboard
 
-| Monitor | Konfiguration |
-|---|---|
-| ![Monitor](docs/screenshots/dashboard-monitor.png) | ![Konfiguration](docs/screenshots/dashboard-konfiguration.png) |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-monitor-dark.png">
+  <img src="docs/screenshots/dashboard-monitor-light.png" alt="Dashboard: Monitor mit Systemstatus, gesendeten Mesh-Nachrichten und Warnungen">
+</picture>
 
-Unter `http://warnbridge.local:8080` zeigt das Dashboard, was gerade empfangen und gesendet wird. Dort stellst du auch alles ein: Bundesland, Landkreise, welche DWD-Warnungen ab welcher Stufe, DAB+-Kanal, MeshCore-Kanal. Änderungen gelten sofort, ohne Neustart. Mit dem Testbutton kannst du eine Probewarnung durch die ganze Kette schicken.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-konfiguration-dark.png">
+  <img src="docs/screenshots/dashboard-konfiguration-light.png" alt="Dashboard: Konfiguration mit Region, MeshCore, DAB+ und NINA">
+</picture>
+
+Unter `http://warnbridge.local:8080` zeigt das Dashboard, was gerade empfangen und gesendet wird. Es folgt der Hell/Dunkel-Einstellung des Geräts und braucht kein Internet, auch die Schrift liegt lokal. Dort stellst du auch alles ein: Bundesland, Landkreise, welche DWD-Warnungen ab welcher Stufe, DAB+-Kanal, MeshCore-Kanal. Änderungen gelten sofort, ohne Neustart. Mit dem Testbutton kannst du eine Probewarnung durch die ganze Kette schicken.
 
 Zum Ausprobieren ohne Hardware gibt es einen Simulator-Modus: Statt ins Mesh gehen die Nachrichten ins Dashboard, und Bot-Befehle tippst du dort ein.
 

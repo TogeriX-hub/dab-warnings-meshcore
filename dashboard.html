@@ -5,21 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WarnBridge Dashboard</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-Regular-Latin1.woff2') format('woff2'); }
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-Medium-Latin1.woff2') format('woff2'); }
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexMono-SemiBold-Latin1.woff2') format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 400; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-Regular-Latin1.woff2') format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 500; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-Medium-Latin1.woff2') format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 600; font-style: normal; font-display: swap; src: url('/static/fonts/IBMPlexSans-SemiBold-Latin1.woff2') format('woff2'); }
 
+  /* Light by default, dark when the system asks for it */
   :root {
-    --bg:       #0d0f12;
-    --surface:  #151820;
-    --border:   #1e2430;
-    --text:     #c8d0dc;
-    --muted:    #4a5568;
-    --accent:   #f5a623;
-    --red:      #e05252;
-    --green:    #4caf7d;
-    --blue:     #5b9cf6;
-    --yellow:   #f5c842;
-    --mono:     'IBM Plex Mono', monospace;
-    --sans:     'IBM Plex Sans', sans-serif;
+    --bg:          #f4f5f4;
+    --surface:     #ffffff;
+    --surface2:    #eceeec;
+    --hover:       #eef0ee;
+    --border:      #dde1de;
+    --text:        #1f2522;
+    --muted:       #6a746f;
+    --accent:      #d4500a;
+    --accent-soft: #fde9dc;
+    --accent-line: #f3b590;
+    --red:         #c43b34;
+    --red-soft:    #fbe4e2;
+    --green:       #1d8553;
+    --green-soft:  #dcf2e6;
+    --blue:        #2463c4;
+    --blue-soft:   #e1ebfb;
+    --blue-line:   #b3c9ef;
+    --yellow:      #9a6a00;
+    --yellow-soft: #fbefd2;
+    --chip:        #f0f2f0;
+    --mono:        'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+    --sans:        'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:          #0d0f12;
+      --surface:     #151820;
+      --surface2:    #1b2029;
+      --hover:       #1a1e28;
+      --border:      #232a35;
+      --text:        #c8d0dc;
+      --muted:       #6b7787;
+      --accent:      #e8590c;
+      --accent-soft: #2e1608;
+      --accent-line: #6b2f0e;
+      --red:         #e05252;
+      --red-soft:    #3d1111;
+      --green:       #4caf7d;
+      --green-soft:  #16301f;
+      --blue:        #5b9cf6;
+      --blue-soft:   #0d1e3a;
+      --blue-line:   #1a3a6a;
+      --yellow:      #f5c842;
+      --yellow-soft: #2d2200;
+      --chip:        #1a1e28;
+      color-scheme: dark;
+    }
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,10 +70,11 @@
   /* Header */
   header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .header-left { display: flex; align-items: center; gap: 12px; flex: 1; }
-  header .logo { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0.05em; }
+  header .logo { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: 0.22em; }
+  header .logo::before { content: ""; width: 11px; height: 11px; border-radius: 2px; background: var(--accent); flex-shrink: 0; }
   header .sep { color: var(--border); }
   header .subtitle { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-  #sim-badge { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: #2a2000; color: var(--accent); border: 1px solid #5a3800; display: none; }
+  #sim-badge { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-line); display: none; }
   #sim-badge.active { display: block; }
   #conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
   #conn-dot.ok { background: var(--green); }
@@ -51,6 +94,7 @@
   /* Monitor Grid */
   .monitor-grid { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; gap: 1px; background: var(--border); width: 100%; }
   .panel { background: var(--bg); overflow: hidden; display: flex; flex-direction: column; }
+  #panel-sim { grid-column: 2; grid-row: 1 / 3; }
   .panel-title { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 10px 14px 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
   .panel-body { flex: 1; overflow-y: auto; padding: 12px 14px; }
   .panel-body::-webkit-scrollbar { width: 4px; }
@@ -91,13 +135,13 @@
   .warn-card.Moderate { border-left: 3px solid var(--blue); }
   .warn-card.Minor   { border-left: 3px solid var(--muted); }
   .warn-header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface); cursor: pointer; user-select: none; }
-  .warn-header:hover { background: #1a1e28; }
+  .warn-header:hover { background: var(--hover); }
   .sev-badge { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 2px; text-transform: uppercase; flex-shrink: 0; }
-  .sev-badge.Extreme { background: #3d1111; color: var(--red); }
-  .sev-badge.Severe  { background: #2d2200; color: var(--yellow); }
-  .sev-badge.Moderate { background: #0d1e3a; color: var(--blue); }
-  .sev-badge.Minor   { background: #1a1a1a; color: var(--muted); }
-  .src-badge { font-family: var(--mono); font-size: 9px; padding: 2px 5px; border-radius: 2px; background: #1a1e28; color: var(--muted); border: 1px solid var(--border); flex-shrink: 0; }
+  .sev-badge.Extreme { background: var(--red-soft); color: var(--red); }
+  .sev-badge.Severe  { background: var(--yellow-soft); color: var(--yellow); }
+  .sev-badge.Moderate { background: var(--blue-soft); color: var(--blue); }
+  .sev-badge.Minor   { background: var(--chip); color: var(--muted); }
+  .src-badge { font-family: var(--mono); font-size: 9px; padding: 2px 5px; border-radius: 2px; background: var(--chip); color: var(--muted); border: 1px solid var(--border); flex-shrink: 0; }
   .warn-headline { font-size: 12px; font-weight: 500; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .warn-time { font-family: var(--mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
   .broadcast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
@@ -114,7 +158,7 @@
   .config-content::-webkit-scrollbar { width: 4px; }
   .config-content::-webkit-scrollbar-thumb { background: var(--border); }
 
-  .setup-banner { background: #1a1200; border: 1px solid #5a3800; border-radius: 6px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
+  .setup-banner { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 6px; padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
   .setup-banner.hidden { display: none; }
   .setup-banner .icon { font-size: 22px; flex-shrink: 0; }
   .setup-banner .title { font-weight: 600; color: var(--accent); margin-bottom: 2px; }
@@ -144,11 +188,11 @@
   .switch input { opacity: 0; width: 0; height: 0; }
   .slider { position: absolute; cursor: pointer; top:0; left:0; right:0; bottom:0; background: var(--border); border-radius: 18px; transition: 0.2s; }
   .slider:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; bottom: 3px; background: var(--muted); border-radius: 50%; transition: 0.2s; }
-  input:checked + .slider { background: #1a3a20; }
+  input:checked + .slider { background: var(--green-soft); }
   input:checked + .slider:before { transform: translateX(14px); background: var(--green); }
 
   .district-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-height: 28px; }
-  .district-tag { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: #0d1e3a; color: var(--blue); border: 1px solid #1a3a6a; display: flex; align-items: center; gap: 5px; }
+  .district-tag { font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; background: var(--blue-soft); color: var(--blue); border: 1px solid var(--blue-line); display: flex; align-items: center; gap: 5px; }
   .district-tag .remove { cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; }
   .district-tag .remove:hover { color: var(--red); }
   .add-district-row { display: flex; gap: 6px; margin-top: 8px; }
@@ -156,14 +200,14 @@
 
   .btn { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 6px 12px; border: 1px solid; border-radius: 3px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; background: transparent; transition: background 0.15s, color 0.15s; white-space: nowrap; }
   .btn-primary { border-color: var(--accent); color: var(--accent); }
-  .btn-primary:hover { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover { background: var(--accent); color: #fff; }
   .btn-green { border-color: var(--green); color: var(--green); }
   .btn-green:hover { background: var(--green); color: var(--bg); }
   .btn-send { border-color: var(--blue); color: var(--blue); }
   .btn-send:hover:not(:disabled) { background: var(--blue); color: var(--bg); }
   .btn-send:disabled { opacity: 0.3; cursor: not-allowed; }
   .btn-test { border-color: var(--accent); color: var(--accent); width: 100%; }
-  .btn-test:hover { background: var(--accent); color: var(--bg); }
+  .btn-test:hover { background: var(--accent); color: #fff; }
 
   .save-row { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
   .save-status { font-family: var(--mono); font-size: 11px; color: var(--muted); }
@@ -193,14 +237,15 @@
   .onboarding-overlay { position:fixed; inset:0; background:var(--bg); z-index:100; display:flex; align-items:center; justify-content:center; }
   .onboarding-overlay.hidden { display:none; }
   .onboarding-box { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:32px; max-width:520px; width:90%; }
-  .onboarding-title { font-family:var(--mono); font-size:18px; font-weight:600; color:var(--accent); margin-bottom:6px; }
+  .onboarding-title { display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:18px; font-weight:600; color:var(--text); letter-spacing:0.22em; margin-bottom:6px; }
+  .onboarding-title::before { content:""; width:13px; height:13px; border-radius:2px; background:var(--accent); flex-shrink:0; }
   .onboarding-sub { font-size:12px; color:var(--muted); margin-bottom:28px; line-height:1.6; }
   .onboarding-step { margin-bottom:20px; }
   .onboarding-label { font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
   .onboarding-select { width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12px; padding:8px 10px; border-radius:3px; outline:none; }
   .onboarding-select:focus { border-color:var(--accent); }
   .onboarding-hint { font-size:11px; color:var(--muted); margin-top:6px; line-height:1.5; }
-  .onboarding-btn { width:100%; margin-top:24px; font-family:var(--mono); font-size:11px; font-weight:600; padding:10px; border:1px solid var(--accent); border-radius:3px; cursor:pointer; text-transform:uppercase; letter-spacing:0.08em; background:var(--accent); color:var(--bg); transition:opacity 0.15s; }
+  .onboarding-btn { width:100%; margin-top:24px; font-family:var(--mono); font-size:11px; font-weight:600; padding:10px; border:1px solid var(--accent); border-radius:3px; cursor:pointer; text-transform:uppercase; letter-spacing:0.08em; background:var(--accent); color:#fff; transition:opacity 0.15s; }
   .onboarding-btn:hover { opacity:0.85; }
   .onboarding-btn:disabled { opacity:0.3; cursor:not-allowed; }
 </style>
@@ -211,7 +256,7 @@
 <!-- Onboarding -->
 <div class="onboarding-overlay hidden" id="onboarding">
   <div class="onboarding-box">
-    <div class="onboarding-title">WarnBridge</div>
+    <div class="onboarding-title">WARNBRIDGE</div>
     <div class="onboarding-sub">Willkommen. Bitte wähle dein Bundesland und den Kreis der überwacht werden soll. Du kannst diese Einstellungen jederzeit unter Konfiguration ändern.</div>
     <div class="onboarding-step">
       <div class="onboarding-label">Bundesland</div>
@@ -232,7 +277,7 @@
 
 <header>
   <div class="header-left">
-    <div class="logo">WarnBridge</div>
+    <div class="logo">WARNBRIDGE</div>
     <div class="sep">|</div>
     <div class="subtitle">DAB+ → MeshCore</div>
     <div id="sim-badge">SIMULATOR</div>
@@ -284,7 +329,7 @@
       </div>
       <div class="sim-footer">
         <div class="sim-input-row">
-          <input class="sim-input" id="sim-input" type="text" placeholder="/details · /warnings Böblingen · /status · /help" disabled>
+          <input class="sim-input" id="sim-input" type="text" placeholder="/details · /warnings Karlsruhe · /status · /help" disabled>
           <button class="btn btn-send" id="btn-send" disabled>Send</button>
         </div>
         <button class="btn btn-test" id="btn-test" onclick="triggerTest()">⚡ Testwarnung auslösen</button>
@@ -332,7 +377,7 @@
 
       <!-- Region -->
       <div class="config-section">
-        <div class="config-section-title">🗺️ Region</div>
+        <div class="config-section-title">Region</div>
         <div class="config-body">
           <div class="field">
             <label>Bundesland</label>
@@ -353,7 +398,7 @@
 
       <!-- MeshCore -->
       <div class="config-section">
-        <div class="config-section-title">📡 MeshCore</div>
+        <div class="config-section-title">MeshCore</div>
         <div class="config-body">
           <div class="field">
             <label>Host (IP des Heltec)</label>
@@ -392,7 +437,7 @@
 
       <!-- DAB+ -->
       <div class="config-section">
-        <div class="config-section-title">📻 DAB+</div>
+        <div class="config-section-title">DAB+</div>
         <div class="config-body">
           <div class="field">
             <label>welle-cli URL</label>
@@ -431,7 +476,7 @@
 
       <!-- NINA -->
       <div class="config-section">
-        <div class="config-section-title">🌐 NINA API</div>
+        <div class="config-section-title">NINA API</div>
         <div class="config-body">
           <div class="field">
             <label>Poll-Intervall (Minuten)</label>
@@ -464,12 +509,12 @@
 
       <!-- DWD -->
       <div class="config-section full-width">
-        <div class="config-section-title">⛈️ DWD Warnfilter</div>
+        <div class="config-section-title">DWD Warnfilter</div>
         <div class="config-body" id="dwd-toggles"></div>
       </div>
 
       <div class="config-section">
-        <div class="config-section-title">&#9728;&#65039; Weltraumwetter (NOAA SWPC)</div>
+        <div class="config-section-title">Weltraumwetter (NOAA SWPC)</div>
         <div class="config-body">
           <div class="toggle-row" style="border:none;padding:4px 0">
             <span class="toggle-label">Aktiviert</span>
@@ -602,7 +647,7 @@ function setBroadcastingUI(enabled) {
     btn.textContent = '▶ BROADCASTING AN';
     btn.style.borderColor = 'var(--green)';
     btn.style.color = 'var(--green)';
-    btn.style.background = 'rgba(76,175,125,0.1)';
+    btn.style.background = 'var(--green-soft)';
   } else {
     btn.textContent = '⏸ BROADCASTING AUS';
     btn.style.borderColor = 'var(--red)';
@@ -731,7 +776,7 @@ function updateSimUI() {
   const panelTitle=document.getElementById('panel-sim-title');
   if (isSimulator) {
     badge.classList.add('active');
-    note.textContent='/details · /warnings Böblingen · /status · /help';
+    note.textContent='/details · /warnings Karlsruhe · /status · /help';
     input.disabled=false; input.classList.add('active'); btnSend.disabled=false;
     document.getElementById('btn-clear').style.display='block';
     if(panelTitle) panelTitle.textContent='Simulator / Mesh-Output';
