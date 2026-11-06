@@ -1,6 +1,18 @@
-# WarnBridge
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.svg">
+    <img src="docs/brand/logo-light.svg" alt="WarnBridge" width="420">
+  </picture>
+</p>
 
-![WarnBridge](docs/screenshots/hero.png)
+<p align="center">Offizielle Warnungen aus dem DAB+-Radio ins MeshCore-Netz, auch ohne Internet.</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/message-dark.svg">
+    <img src="docs/brand/message-light.svg" alt="So kommt eine Warnung im Mesh an: [!] DWD | Amtliche WARNUNG vor STARKEM GEWITTER | Esslingen | /details" width="680">
+  </picture>
+</p>
 
 WarnBridge holt offizielle Warnmeldungen aus dem DAB+-Radio und schickt sie als kurze Textnachricht in ein MeshCore-Netz. Dazu kommen die Warnungen aus der NINA-App des Bundes, solange Internet da ist. Das Ganze läuft auf einem Raspberry Pi mit einem RTL-SDR-Stick und einem Heltec-LoRa-Node.
 
@@ -12,7 +24,10 @@ WarnBridge verbindet beides: Der Pi hört das Radio ab, und wer in Reichweite de
 
 ## Wie es funktioniert
 
-![Architektur](docs/screenshots/architektur.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/architektur-dark.svg">
+  <img src="docs/brand/architektur-light.svg" alt="DAB+, NINA und Weltraumwetter laufen über den Raspberry Pi und den Heltec ins Mesh">
+</picture>
 
 Es gibt drei Quellen:
 
@@ -21,12 +36,6 @@ Es gibt drei Quellen:
 - **Weltraumwetter** – Sonnenstürme und Funkausfälle von der NOAA, weil sie LoRa direkt betreffen.
 
 Alles landet in einer gemeinsamen Datenbank. Ins Mesh geht nur, was die eingestellten Landkreise betrifft und die gewählte Stufe erreicht – und jede Warnung nur einmal. Bei einem langen Gewitter schickt der DWD zum Beispiel alle paar Minuten ein Update. WarnBridge sendet dann nur, wenn sich die Warnstufe wirklich ändert.
-
-Eine Warnung im Mesh sieht so aus:
-
-```
-[!] DWD | Amtliche Unwetterwarnung vor schwerem Gewitter | Esslingen | /details
-```
 
 ## Bot-Befehle im Mesh
 
