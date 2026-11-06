@@ -164,6 +164,7 @@ class WarnBridge:
             #   1x pro Kreis+Ereignis über den alten Hash-Mechanismus,
             #   da hier kein vergleichbares Level-Feld existiert.
             should_send = True
+            b_hash = None
             if w.source == "dwd" and w.dwd_level is not None:
                 state_key = f"{w_send.area_desc}|{w.dwd_event_type or ''}"
                 is_cancel = (w.msg_type or "").lower() == "cancel"
@@ -177,13 +178,15 @@ class WarnBridge:
             else:
                 import hashlib as _hl
                 broadcast_hash = f"{w.headline.lower()}|{w_send.area_desc}"
+                if is_test:
+                    # Jede Testwarnung ist eigenständig (eindeutiger identifier),
+                    # sonst kommt der Testbutton nur einmal pro TTL-Fenster durch.
+                    broadcast_hash += f"|{w.identifier}"
                 b_hash = _hl.md5(broadcast_hash.encode()).hexdigest()
                 if self.is_broadcast_duplicate(b_hash):
                     should_send = False
-                    logger.debug("Broadcast-Duplikat übersprungen: %s | %s",
-                                 w.headline, w_send.area_desc)
-                else:
-                    self.mark_broadcast_seen(b_hash)
+                    logger.info("Broadcast-Duplikat übersprungen: %s | %s",
+                                w.headline, w_send.area_desc)
 
             if not should_send:
                 pass
@@ -195,6 +198,10 @@ class WarnBridge:
                 success = await self.mesh.send_warning(w_send)
                 if success:
                     self.db.mark_broadcast_sent(db_id)
+                    # Erst nach erfolgreichem Versand als gesendet merken –
+                    # ein fehlgeschlagener Versand darf die Wiederholung nicht blockieren.
+                    if b_hash:
+                        self.mark_broadcast_seen(b_hash)
                     self.dedup.mark_sent()  # Rate-Limit-Zähler: nur echte Sends
                     # Zähler für "gesendet 1h" – nur echte Mesh-Sends
                     now_ts = datetime.now(timezone.utc)
@@ -276,6 +283,15 @@ class WarnBridge:
             return severity_order.index(w.severity) >= severity_order.index(min_sev)
         except ValueError:
             return False
+    def _bot_enabled(self) -> bool:
+        """Bot-Befehle aus dem Mesh beantworten?
+        Aus über config.yaml (meshcore.bot_enabled: false) oder ohne Neustart
+        über eine Datei 'bot_off' im Programmordner (touch bot_off / rm bot_off).
+        Sinnvoll z.B. wenn zwei WarnBridge-Instanzen im selben Kanal laufen."""
+        if not self.cfg.get("meshcore", {}).get("bot_enabled", True):
+            return False
+        return not (Path(__file__).resolve().parent / "bot_off").exists()
+
     def is_broadcast_duplicate(self, b_hash: str) -> bool:
         """Prüft ob diese Warnung für diesen Kreis kürzlich gesendet wurde."""
         now = datetime.now(timezone.utc)
@@ -456,9 +472,13 @@ class WarnBridge:
         async def _mesh_send(text: str) -> bool:
             return await self.mesh.send_text(text, msg_type="reply")
 
-        self.mesh.start_listen_loop(
-            lambda cmd: self.bot.handle(cmd, _mesh_send)
-        )
+        async def _mesh_command(cmd: str):
+            if not self._bot_enabled():
+                logger.info("MeshCore Befehl ignoriert (Bot aus): %s", cmd)
+                return
+            await self.bot.handle(cmd, _mesh_send)
+
+        self.mesh.start_listen_loop(_mesh_command)
 
         # Täglicher Cleanup
         self._tasks.append(asyncio.create_task(self._cleanup_loop(), name="cleanup"))

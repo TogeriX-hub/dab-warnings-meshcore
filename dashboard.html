@@ -287,7 +287,7 @@
           <input class="sim-input" id="sim-input" type="text" placeholder="/details · /warnings Böblingen · /status · /help" disabled>
           <button class="btn btn-send" id="btn-send" disabled>Send</button>
         </div>
-        <button class="btn btn-test" onclick="triggerTest()">⚡ Testwarnung auslösen</button>
+        <button class="btn btn-test" id="btn-test" onclick="triggerTest()">⚡ Testwarnung auslösen</button>
         <button class="btn" id="btn-clear" onclick="clearSimulator()" style="border-color:var(--red);color:var(--red);width:100%;margin-top:6px;display:none">🗑 Simulator & Testwarnungen leeren</button>
         <div class="sim-note" id="sim-note">Simulator nicht aktiv</div>
       </div>
@@ -378,6 +378,13 @@
             <div class="toggle-row" style="border:none;padding:4px 0">
               <span style="font-size:11px;color:var(--muted)">Nachrichten ins Dashboard statt ins Mesh</span>
               <label class="switch"><input type="checkbox" id="cfg-mc-sim"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Bot-Befehle</label>
+            <div class="toggle-row" style="border:none;padding:4px 0">
+              <span style="font-size:11px;color:var(--muted)">/status, /help … im Kanal beantworten</span>
+              <label class="switch"><input type="checkbox" id="cfg-mc-bot"><span class="slider"></span></label>
             </div>
           </div>
         </div>
@@ -859,6 +866,7 @@ function applyConfigToUI() {
   document.getElementById('cfg-mc-channel').value=mc.channel_idx??0;
   document.getElementById('cfg-mc-scope').value=mc.scope||'*';
   document.getElementById('cfg-mc-sim').checked=mc.simulator??true;
+  document.getElementById('cfg-mc-bot').checked=mc.bot_enabled??true;
   document.getElementById('cfg-dab-url').value=dab.welle_cli_url||'http://localhost:7979';
   if(document.getElementById('cfg-dab-path'))document.getElementById('cfg-dab-path').value=dab.welle_cli_path||'';
   document.getElementById('cfg-dab-channel').value=dab.channel||'9D';
@@ -977,6 +985,7 @@ async function saveConfig() {
       channel_idx:parseInt(document.getElementById('cfg-mc-channel').value),
       scope:document.getElementById('cfg-mc-scope').value,
       simulator:document.getElementById('cfg-mc-sim').checked,
+      bot_enabled:document.getElementById('cfg-mc-bot').checked,
     },
     dab:{
       welle_cli_url:document.getElementById('cfg-dab-url').value,

@@ -38,7 +38,7 @@ Das Web-Dashboard ist erreichbar unter `http://warnbridge.local:8080` (Pi) oder 
 - NINA API: MoWaS (alle Schweregrade konfigurierbar) + DWD (pro Ereignistyp + Stufe)
 - CAP-Normalisierung, Deduplizierung, SQLite-Speicherung (48h)
 - MeshCore-Integration per TCP, konfigurierbarer Channel + Scope
-- Bot-Befehle im Mesh: `/details`, `/warnings <Ort>`, `/status`, `/help`
+- Bot-Befehle im Mesh: `/details`, `/warnings <Ort>`, `/status`, `/swdetails`, `/help` (abschaltbar)
 - Web-Dashboard mit Live-Updates, Konfiguration ohne Neustart, Testwarnung-Funktion
 - systemd-Service mit Watchdog-Heartbeat und automatischem welle-cli-Neustart
 - Entwicklung ohne Hardware möglich (Simulator-Modus)
