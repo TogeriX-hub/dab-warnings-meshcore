@@ -18,7 +18,7 @@ WarnBridge holt offizielle Warnmeldungen aus dem DAB+-Radio und schickt sie als 
 
 ## Warum?
 
-Bei einem großen Stromausfall sind Handynetz und Internet schnell weg – und damit NINA, Warn-Apps und Cell Broadcast. DAB+ läuft weiter: Die Sender haben Notstrom, und seit 2024 gibt es mit **ASA** (Automatic Safety Alert) einen Standard, über den Warnungen samt Text ausgestrahlt werden. Ein Radio hat aber nicht jeder dabei, ein MeshCore-Node schon eher.
+Bei einem großen Stromausfall sind Handynetz und Internet schnell weg – und damit NINA, Warn-Apps und Cell Broadcast. DAB+ läuft weiter: Die Sender haben Notstrom, und seit 2024 gibt es mit **ASA** (Automatic Safety Alert) einen Standard, über den Warnungen samt Text ausgestrahlt werden.
 
 WarnBridge verbindet beides: Der Pi hört das Radio ab, und wer in Reichweite des Mesh ist, bekommt die Warnung aufs Handy oder den Tracker – ganz ohne Internet. Mehr zur Idee hinter MeshCore im Off-Grid-Einsatz steht bei [FieldMesh](https://github.com/TogeriX-hub/FieldMesh).
 
