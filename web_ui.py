@@ -43,6 +43,7 @@ class WebUI:
         aio_app.router.add_get("/", self._handle_index)
         aio_app.router.add_get("/dashboard.html", self._handle_index)
         aio_app.router.add_get("/ws", self._handle_ws)
+        aio_app.router.add_get("/ws/terminal", self._handle_terminal)
         if STATIC_PATH.is_dir():
             aio_app.router.add_static("/static/", STATIC_PATH)
         aio_app.router.add_get("/api/status", self._api_status)
@@ -89,6 +90,11 @@ class WebUI:
             return web.Response(text="dashboard.html nicht gefunden", status=404)
         content = DASHBOARD_PATH.read_text(encoding="utf-8")
         return web.Response(text=content, content_type="text/html", charset="utf-8")
+
+    async def _handle_terminal(self, request: web.Request) -> web.StreamResponse:
+        """Shell im Dashboard (Shift+T) – nur wenn terminal.enabled in config.yaml."""
+        import web_terminal
+        return await web_terminal.handle(request, self.config.get("terminal", {}) or {})
 
     async def _api_status(self, request: web.Request) -> web.Response:
         status = self.app.status()

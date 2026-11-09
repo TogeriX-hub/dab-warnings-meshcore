@@ -60,3 +60,7 @@ dedup:
 
 warnings_db:
   ttl_hours: 48
+
+terminal:
+  enabled: false          # Terminal im Dashboard (Shift+T) für Wartung. Nur hier einschaltbar, siehe docs/konfiguration.md
+  allowed_hosts: []       # zusätzliche Hostnamen, über die das Dashboard aufgerufen wird (IPs, .local, .ts.net gehen immer)
