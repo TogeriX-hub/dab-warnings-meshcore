@@ -12,8 +12,13 @@ Die Versionen bis einschließlich 1.3.0 wurden im November 2026 nachträglich ve
 
 Schon auf `main`, kommt mit der nächsten Version.
 
+**Neu**
+- Terminal im Dashboard für Wartung und Fehlersuche, öffnen mit Shift+T. Standardmäßig aus, einschalten nur in `config.yaml` (`terminal: enabled: true`). Mit tmux bleibt die Sitzung beim Neuladen und beim Neustart von WarnBridge erhalten, so lässt sich auch `./update.sh` von dort starten. Siehe [Konfiguration](docs/konfiguration.md#terminal)
+
 **Behoben**
+- Shift+R (RxLog) sprang auch an, wenn man in einem Eingabefeld ein großes R getippt hat
 - Dashboard: Die automatische Aktualisierung alle 10 Sekunden klappt aufgeklappte Warnungen nicht mehr zu. Scroll-Position und markierter Text bleiben erhalten, neu gezeichnet wird nur, wenn sich wirklich etwas geändert hat. Dasselbe gilt für das RxLog
+- DAB+: Umlaute und Sonderzeichen in Journaline-Texten kamen verstümmelt an (z.B. „BÃ¶blingen“ statt „Böblingen“). welle-cli gibt Titel und Text jetzt korrekt als UTF-8 weiter, auch im RxLog
 
 ## 1.4.0 – Bot-Empfang, neuer Auftritt, Updates per Skript
 

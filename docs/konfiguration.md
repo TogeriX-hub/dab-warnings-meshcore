@@ -144,3 +144,26 @@ broadcasting:
 ```
 
 Dieser Wert wird automatisch gesetzt wenn der Broadcasting-Schalter im Dashboard umgelegt wird. Beim nächsten Start von WarnBridge wird der gespeicherte Status wiederhergestellt.
+
+---
+
+## terminal
+
+```yaml
+terminal:
+  enabled: false       # Terminal im Dashboard
+  allowed_hosts: []    # zusätzliche Hostnamen, z.B. ['warnbridge.fritz.box']
+```
+
+Ein Terminal auf dem WarnBridge-Rechner direkt im Dashboard, für Wartung und Fehlersuche. Öffnen mit **Shift+T** im Dashboard (nicht, während der Cursor in einem Eingabefeld steht).
+
+**Einschalten geht nur hier in der `config.yaml`**, nicht über das Dashboard. Danach WarnBridge neu starten (`sudo systemctl restart warnbridge`).
+
+Das Dashboard hat keinen Login. Wer es im Netz erreicht, bekommt mit eingeschaltetem Terminal eine Shell als der Benutzer, unter dem WarnBridge läuft, inklusive dessen `sudo`-Rechten. Schalte es nur ein, wenn du allen Geräten in deinem Netz vertraust, oder greif nur über Tailscale zu. Zwei Schutzmaßnahmen sind immer aktiv:
+
+- Nur die Dashboard-Seite selbst darf das Terminal öffnen. Eine fremde Webseite in deinem Browser kann sich nicht damit verbinden.
+- Das Dashboard muss über eine IP-Adresse, `localhost`, einen `.local`-Namen, einen Tailscale-Namen (`.ts.net`) oder einen Namen aus `allowed_hosts` aufgerufen werden. Das verhindert Angriffe, bei denen eine fremde Domain auf die IP des Pi umgebogen wird.
+
+**Sitzungen bleiben erhalten**, wenn `tmux` installiert ist (`sudo apt install tmux`, auf neuen Installationen schon dabei). Dann läuft die Shell in einer tmux-Sitzung `warnbridge`: Tab schließen oder neu laden beendet nichts, beim nächsten Öffnen bist du wieder drin. Auf dem Pi läuft die Sitzung zusätzlich außerhalb des WarnBridge-Dienstes und übersteht auch dessen Neustart. Darum kannst du `./update.sh` direkt hier starten: Die Verbindung bricht beim Neustart kurz ab, nach „Neu verbinden“ siehst du die restliche Ausgabe. `exit` beendet die Sitzung. Per SSH kommst du in dieselbe Sitzung mit `tmux -L warnbridge attach`.
+
+Ohne tmux ist es eine einfache Shell, die mit dem Tab endet.

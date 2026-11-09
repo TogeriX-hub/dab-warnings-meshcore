@@ -916,13 +916,27 @@ bool WebRadioInterface::send_mux_json(Socket& s)
     return true;
 }
 
-bool WebRadioInterface::send_journaline_json(Socket& s)
+// Escape a UTF-8 string for JSON. Output is plain ASCII: every non-ASCII
+// character becomes \uXXXX (surrogate pair above U+FFFF). The old code escaped
+// each byte on its own, so "ö" (C3 B6) came out as "Ã¶" on the Python side.
+// Invalid UTF-8 bytes are replaced with U+FFFD instead of breaking the JSON.
+static std::string json_escape_utf8(const std::string& in)
 {
-    // JSON-Escaping: alle non-ASCII und Steuerzeichen als \uXXXX
-    auto json_escape = [](const std::string& in) -> std::string {
-        std::string out;
-        out.reserve(in.size() * 2);
-        for (unsigned char c : in) {
+    std::string out;
+    out.reserve(in.size() + 16);
+
+    auto put_u = [&out](uint32_t cp) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(cp));
+        out += buf;
+    };
+
+    const size_t n = in.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+
+        if (c < 0x80) {
             switch (c) {
                 case '"':  out += "\\\""; break;
                 case '\\': out += "\\\\"; break;
@@ -930,18 +944,48 @@ bool WebRadioInterface::send_journaline_json(Socket& s)
                 case '\r': out += "\\r";  break;
                 case '\t': out += "\\t";  break;
                 default:
-                    if (c < 0x20 || c > 0x7E) {
-                        char buf[8];
-                        snprintf(buf, sizeof(buf), "\\u%04x", c);
-                        out += buf;
-                    } else {
-                        out += static_cast<char>(c);
-                    }
+                    if (c < 0x20 || c == 0x7F) put_u(c);
+                    else out += static_cast<char>(c);
             }
+            i++;
+            continue;
         }
-        return out;
-    };
 
+        // Multi-byte sequence: work out length and minimum code point
+        size_t len;
+        uint32_t cp, min_cp;
+        if      ((c & 0xE0) == 0xC0) { len = 2; cp = c & 0x1F; min_cp = 0x80; }
+        else if ((c & 0xF0) == 0xE0) { len = 3; cp = c & 0x0F; min_cp = 0x800; }
+        else if ((c & 0xF8) == 0xF0) { len = 4; cp = c & 0x07; min_cp = 0x10000; }
+        else { put_u(0xFFFD); i++; continue; }  // stray continuation or bad lead byte
+
+        bool ok = (i + len <= n);
+        for (size_t k = 1; ok && k < len; k++) {
+            const unsigned char cc = static_cast<unsigned char>(in[i + k]);
+            if ((cc & 0xC0) != 0x80) ok = false;
+            else cp = (cp << 6) | (cc & 0x3F);
+        }
+        // reject overlong forms, surrogates and values above U+10FFFF
+        if (ok && (cp < min_cp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)))
+            ok = false;
+
+        if (!ok) { put_u(0xFFFD); i++; continue; }
+
+        if (cp >= 0x10000) {
+            cp -= 0x10000;
+            put_u(0xD800 + (cp >> 10));
+            put_u(0xDC00 + (cp & 0x3FF));
+        }
+        else {
+            put_u(cp);
+        }
+        i += len;
+    }
+    return out;
+}
+
+bool WebRadioInterface::send_journaline_json(Socket& s)
+{
     bool present = false;
     std::string service_type;
     uint16_t apptype = 0;
@@ -976,8 +1020,8 @@ bool WebRadioInterface::send_journaline_json(Socket& s)
         json += "{";
         json += "\"object_id\":"  + to_string(obj.object_id) + ",";
         json += "\"type\":"        + to_string(obj.type) + ",";
-        json += "\"title\":\""    + json_escape(obj.title) + "\",";
-        json += "\"body\":\""     + json_escape(obj.body)  + "\",";
+        json += "\"title\":\""    + json_escape_utf8(obj.title) + "\",";
+        json += "\"body\":\""     + json_escape_utf8(obj.body)  + "\",";
         json += "\"received\":"   + to_string(
                     chrono::system_clock::to_time_t(obj.time));
         json += "}";
@@ -1002,16 +1046,10 @@ bool WebRadioInterface::send_rxlog_json(Socket& s)
     for (const auto& e : entries) {
         if (!first) json += ",";
         first = false;
-        std::string safe_title;
-        for (unsigned char c : e.title) {
-            if (c == '"') { safe_title += "\\\""; }
-            else if (c == '\\') { safe_title += "\\\\"; }
-            else if (c >= 0x20 && c < 0x7F) { safe_title += c; }
-            else { char buf[8]; snprintf(buf,sizeof(buf),"\\u%04x",c); safe_title+=buf; }
-        }
+        const std::string safe_title = json_escape_utf8(e.title);
         json += "{";
         json += "\"received\":"       + to_string(e.received) + ",";
-        json += "\"service_type\":\"" + e.service_type + "\",";
+        json += "\"service_type\":\"" + json_escape_utf8(e.service_type) + "\",";
         json += "\"apptype\":"        + to_string(e.apptype) + ",";
         json += "\"object_id\":"      + to_string(e.object_id) + ",";
         json += "\"obj_type\":"       + to_string(e.obj_type) + ",";

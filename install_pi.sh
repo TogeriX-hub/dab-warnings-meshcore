@@ -28,6 +28,7 @@ sudo apt install -y \
     pkg-config \
     zlib1g-dev \
     xxd \
+    tmux \
     logrotate
 
 # ── 2. RTL-SDR Kernel-Treiber blacklisten ────────────────────────────────────

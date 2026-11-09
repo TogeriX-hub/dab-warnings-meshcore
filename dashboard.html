@@ -225,6 +225,15 @@
   .rxlog-type-unknown { color:var(--muted); }
   .rxlog-asa-active { color:var(--red); font-weight:600; }
 
+  /* Terminal (hidden, Shift+T) – always dark, like a real terminal */
+  #tab-terminal { flex-direction: column; padding: 12px 16px 16px; gap: 8px; }
+  .term-bar { display:flex; align-items:center; gap:12px; font-family:var(--mono); font-size:10px; color:var(--muted); flex-wrap:wrap; }
+  .term-bar .term-state { font-weight:600; }
+  .term-bar .term-state.ok { color:var(--green); }
+  .term-bar .term-state.err { color:var(--red); }
+  #term-wrap { flex:1; min-height:240px; background:#0d0f12; border:1px solid var(--border); border-radius:4px; padding:6px; overflow:hidden; }
+  #term { width:100%; height:100%; }
+
   @media (max-width: 700px) {
     .config-sections { grid-template-columns: 1fr; }
     .config-section.full-width { grid-column: 1; }
@@ -298,6 +307,7 @@
     <span class="setup-dot" id="setup-dot"></span>
   </div>
   <div class="tab" id="tab-rxlog-btn" onclick="switchTab('rxlog')" style="display:none">RxLog</div>
+  <div class="tab" id="tab-terminal-btn" onclick="switchTab('terminal')" style="display:none">Terminal</div>
 </div>
 
 <!-- ══ MONITOR ══ -->
@@ -360,6 +370,16 @@
       <div class="empty-state"><div class="icon">📦</div>Keine Pakete empfangen</div>
     </div>
   </div>
+</div>
+
+<!-- ══ TERMINAL (versteckt, Shift+T) ══ -->
+<div class="tab-content" id="tab-terminal">
+  <div class="term-bar">
+    <span class="term-state" id="term-state">Nicht verbunden</span>
+    <span id="term-mode"></span>
+    <button class="btn" id="term-reconnect" onclick="termConnect()" style="border-color:var(--muted);color:var(--muted);padding:3px 8px;display:none">↻ Neu verbinden</button>
+  </div>
+  <div id="term-wrap"><div id="term"></div></div>
 </div>
 
 <!-- ══ CONFIG ══ -->
@@ -591,6 +611,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   document.querySelector(`.tab[onclick="switchTab('${name}')"]`).classList.add('active');
   document.getElementById(`tab-${name}`).classList.add('active');
+  if (name === 'terminal') termOpen();
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────
@@ -1145,15 +1166,112 @@ async function loadRxLog() {
   } catch(e) {}
 }
 
-// Shift+R → RxLog-Tab einblenden und öffnen
+// Shift+R → RxLog, Shift+T → Terminal. Not while typing in a field
+// (that includes the terminal itself), otherwise a capital R or T would switch tabs.
 document.addEventListener('keydown', e => {
-  if (e.shiftKey && e.key === 'R') {
-    const btn = document.getElementById('tab-rxlog-btn');
-    btn.style.display = 'block';
+  if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+  const el = e.target;
+  if (el && (el.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(el.tagName))) return;
+  if (e.key === 'R') {
+    document.getElementById('tab-rxlog-btn').style.display = 'block';
     switchTab('rxlog');
     loadRxLog();
+  } else if (e.key === 'T') {
+    e.preventDefault();
+    document.getElementById('tab-terminal-btn').style.display = 'block';
+    switchTab('terminal');
   }
 });
+
+// ── Terminal ──────────────────────────────────────────────────────────
+// Shell on the WarnBridge machine via /ws/terminal. Off unless
+// terminal.enabled is set in config.yaml. xterm.js is served from /static
+// so it also works without internet. Loaded only when the tab is opened.
+let term = null, termFit = null, termWs = null, termLoading = null;
+
+function termLoadLib() {
+  if (window.Terminal && window.FitAddon) return Promise.resolve();
+  if (termLoading) return termLoading;
+  const css = document.createElement('link');
+  css.rel = 'stylesheet'; css.href = '/static/xterm/xterm.css';
+  document.head.appendChild(css);
+  const load = src => new Promise((ok, fail) => {
+    const sc = document.createElement('script');
+    sc.src = src; sc.onload = ok; sc.onerror = () => fail(new Error(src));
+    document.head.appendChild(sc);
+  });
+  termLoading = load('/static/xterm/xterm.js').then(() => load('/static/xterm/addon-fit.js'));
+  return termLoading;
+}
+
+function termSetState(text, cls) {
+  const el = document.getElementById('term-state');
+  el.textContent = text; el.className = 'term-state ' + (cls || '');
+  document.getElementById('term-reconnect').style.display = (cls === 'ok') ? 'none' : 'inline-block';
+}
+
+async function termOpen() {
+  try { await termLoadLib(); }
+  catch (e) { termSetState('xterm.js fehlt (' + e.message + ')', 'err'); return; }
+  if (!term) {
+    try { await document.fonts.ready; } catch (e) {}
+    term = new Terminal({
+      fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace',
+      fontSize: 13,
+      cursorBlink: true,
+      scrollback: 5000,
+      macOptionClickForcesSelection: true,
+      theme: { background: '#0d0f12', foreground: '#c8d0dc', cursor: '#e8590c', selectionBackground: '#6b2f0e' },
+    });
+    termFit = new FitAddon.FitAddon();
+    term.loadAddon(termFit);
+    term.open(document.getElementById('term'));
+    term.onData(d => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({t:'i', d})); });
+    term.onResize(({cols, rows}) => { if (termWs && termWs.readyState === 1) termWs.send(JSON.stringify({t:'r', c:cols, r:rows})); });
+    new ResizeObserver(() => { if (document.getElementById('tab-terminal').classList.contains('active')) { try { termFit.fit(); } catch (e) {} } })
+      .observe(document.getElementById('term-wrap'));
+  }
+  requestAnimationFrame(() => { try { termFit.fit(); } catch (e) {} term.focus(); });
+  if (!termWs || termWs.readyState > 1) termConnect();
+}
+
+function termConnect() {
+  if (!term) { termOpen(); return; }
+  if (termWs && termWs.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  termWs = new WebSocket(`${proto}://${location.host}/ws/terminal`);
+  termWs.binaryType = 'arraybuffer';
+  termSetState('Verbinde…', '');
+  document.getElementById('term-mode').textContent = '';
+  termWs.onopen = () => {
+    termSetState('Verbunden', 'ok');
+    try { termFit.fit(); } catch (e) {}
+    termWs.send(JSON.stringify({t:'r', c:term.cols, r:term.rows}));
+    term.focus();
+  };
+  termWs.onmessage = ev => {
+    if (typeof ev.data !== 'string') { term.write(new Uint8Array(ev.data)); return; }
+    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === 'info') {
+      const hints = {
+        persistent: 'tmux-Sitzung · bleibt bei Neuladen und WarnBridge-Neustart erhalten · Markieren: Shift (Mac: Alt) + Ziehen',
+        tmux: 'tmux-Sitzung · bleibt beim Neuladen erhalten, endet aber beim Neustart von WarnBridge · Markieren: Shift (Mac: Alt) + Ziehen',
+        simple: 'Einfache Sitzung · endet beim Schließen des Tabs · Für dauerhafte Sitzungen: sudo apt install tmux',
+      };
+      document.getElementById('term-mode').textContent = hints[m.mode] || '';
+    } else if (m.type === 'error') {
+      term.writeln('\r\n\x1b[31m' + m.message + '\x1b[0m');
+      termSetState('Nicht verfügbar', 'err');
+    } else if (m.type === 'exit') {
+      termSetState('Sitzung beendet', 'err');
+    }
+  };
+  termWs.onclose = () => {
+    const st = document.getElementById('term-state');
+    if (st.classList.contains('ok')) termSetState('Verbindung getrennt', 'err');
+    else if (st.textContent === 'Verbinde…') termSetState('Verbindung abgelehnt', 'err');
+  };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
